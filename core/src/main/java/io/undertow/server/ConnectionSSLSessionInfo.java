@@ -21,6 +21,7 @@ package io.undertow.server;
 import io.undertow.UndertowMessages;
 import io.undertow.UndertowOptions;
 import io.undertow.server.protocol.http.HttpServerConnection;
+
 import org.xnio.ChannelListener;
 import org.xnio.IoUtils;
 import org.xnio.Options;
@@ -124,6 +125,11 @@ public class ConnectionSSLSessionInfo implements SSLSessionInfo {
 
     @Override
     public void renegotiate(HttpServerExchange exchange, SslClientAuthMode sslClientAuthMode) throws IOException {
+        if ("TLSv1.3".equals(channel.getSslSession().getProtocol())) {
+            // UNDERTOW-1812: TLSv1.3 does not support renegotiation, attempting renegotiation will block
+            // the full MAX_RENEGOTIATION_WAIT timeout.
+            throw UndertowMessages.MESSAGES.renegotiationNotSupported();
+        }
         unverified = null;
         renegotiationRequiredException = null;
         if (exchange.isRequestComplete()) {
@@ -160,24 +166,31 @@ public class ConnectionSSLSessionInfo implements SSLSessionInfo {
         int allowedBuffers = ((maxSize + bufferSize - 1) / bufferSize);
         poolArray = new PooledByteBuffer[allowedBuffers];
         poolArray[usedBuffers++] = pooled;
+        boolean overflow = false;
         try {
             int res;
-            do {
+            for(;;) {
                 final ByteBuffer buf = pooled.getBuffer();
                 res = Channels.readBlocking(requestChannel, buf);
                 if (!buf.hasRemaining()) {
-                    if (usedBuffers == allowedBuffers) {
-                        throw new SSLPeerUnverifiedException("");
+                    buf.flip();
+                    if(allowedBuffers == usedBuffers) {
+                        overflow = true;
+                        break;
                     } else {
-                        buf.flip();
                         pooled = exchange.getConnection().getByteBufferPool().allocate();
                         poolArray[usedBuffers++] = pooled;
                     }
+                } else if(res == -1) {
+                    buf.flip();
+                    break;
                 }
-            } while (res != -1);
+            }
             free = false;
-            pooled.getBuffer().flip();
             Connectors.ungetRequestBytes(exchange, poolArray);
+            if(overflow) {
+                throw new SSLPeerUnverifiedException("Cannot renegotiate");
+            }
             renegotiateNoRequest(exchange, newAuthMode);
         } finally {
             if (free) {

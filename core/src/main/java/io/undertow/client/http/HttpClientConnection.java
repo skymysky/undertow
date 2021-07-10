@@ -92,13 +92,17 @@ class HttpClientConnection extends AbstractAttachable implements Closeable, Clie
     public final ConduitListener<StreamSinkConduit> requestFinishListener = new ConduitListener<StreamSinkConduit>() {
         @Override
         public void handleEvent(StreamSinkConduit channel) {
-            currentRequest.terminateRequest();
+            if(currentRequest != null) {
+                currentRequest.terminateRequest();
+            }
         }
     };
     public final ConduitListener<StreamSourceConduit> responseFinishedListener = new ConduitListener<StreamSourceConduit>() {
         @Override
         public void handleEvent(StreamSourceConduit channel) {
-            currentRequest.terminateResponse();
+            if(currentRequest != null) {
+                currentRequest.terminateResponse();
+            }
         }
     };
 
@@ -552,8 +556,10 @@ class HttpClientConnection extends AbstractAttachable implements Closeable, Clie
                             UndertowLogger.CLIENT_LOGGER.debugf(e, "Connection closed with IOException");
                         }
                         try {
-                            currentRequest.setFailed(e);
-                            currentRequest = null;
+                            if (currentRequest != null) {
+                                currentRequest.setFailed(e);
+                                currentRequest = null;
+                            }
                             pendingResponse = null;
                         } finally {
                             safeClose(channel, HttpClientConnection.this);
@@ -571,8 +577,10 @@ class HttpClientConnection extends AbstractAttachable implements Closeable, Clie
                         channel.suspendReads();
                         try {
                             // Cancel the current active request
-                            currentRequest.setFailed(new IOException(MESSAGES.connectionClosed()));
-                            currentRequest = null;
+                            if (currentRequest != null) {
+                                currentRequest.setFailed(new IOException(MESSAGES.connectionClosed()));
+                                currentRequest = null;
+                            }
                             pendingResponse = null;
                         } finally {
                             safeClose(HttpClientConnection.this);
@@ -586,6 +594,7 @@ class HttpClientConnection extends AbstractAttachable implements Closeable, Clie
                     if (buffer.hasRemaining()) {
                         free = false;
                         pushBackStreamSourceConduit.pushBack(new PooledAdaptor(pooled));
+                        pushBackStreamSourceConduit.wakeupReads();
                     }
 
                 } while (!state.isComplete());
@@ -649,7 +658,10 @@ class HttpClientConnection extends AbstractAttachable implements Closeable, Clie
                                 sinkChannel.setWriteListener(ChannelListeners.flushingChannelListener(null, null));
                                 sinkChannel.resumeWrites();
                             }
-                            currentRequest.terminateRequest();
+                            if(currentRequest != null) {
+                                //we need the null check as flushing the response may have terminated the request
+                                currentRequest.terminateRequest();
+                            }
                         }
                     }
                 }

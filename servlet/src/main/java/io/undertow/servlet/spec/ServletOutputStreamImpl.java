@@ -40,6 +40,7 @@ import org.xnio.channels.StreamSinkChannel;
 import io.undertow.connector.ByteBufferPool;
 import io.undertow.connector.PooledByteBuffer;
 import io.undertow.io.BufferWritableOutputStream;
+import io.undertow.server.protocol.http.HttpAttachments;
 import io.undertow.servlet.UndertowServletMessages;
 import io.undertow.servlet.handlers.ServletRequestContext;
 import io.undertow.util.Headers;
@@ -58,7 +59,7 @@ import io.undertow.util.Headers;
  * Once the write listener has been set operations must only be invoked on this stream from the write
  * listener callback. Attempting to invoke from a different thread will result in an IllegalStateException.
  * <p>
- * Async listener tasks are queued in the {@link AsyncContextImpl}. At most one lister can be active at
+ * Async listener tasks are queued in the {@link AsyncContextImpl}. At most one listener can be active at
  * one time, which simplifies the thread safety requirements.
  *
  * @author Stuart Douglas
@@ -72,6 +73,7 @@ public class ServletOutputStreamImpl extends ServletOutputStream implements Buff
     private StreamSinkChannel channel;
     private long written;
     private volatile int state;
+    private volatile boolean asyncIoStarted;
     private AsyncContextImpl asyncContext;
 
     private WriteListener listener;
@@ -593,7 +595,9 @@ public class ServletOutputStreamImpl extends ServletOutputStream implements Buff
             setFlags(FLAG_CLOSED);
             clearFlags(FLAG_READY);
             if (allAreClear(state, FLAG_WRITE_STARTED) && channel == null && servletRequestContext.getOriginalResponse().getHeader(Headers.CONTENT_LENGTH_STRING) == null) {
-                if (servletRequestContext.getOriginalResponse().getHeader(Headers.TRANSFER_ENCODING_STRING) == null) {
+                if (servletRequestContext.getOriginalResponse().getHeader(Headers.TRANSFER_ENCODING_STRING) == null
+                        && servletRequestContext.getExchange().getAttachment(HttpAttachments.RESPONSE_TRAILER_SUPPLIER) == null
+                        && servletRequestContext.getExchange().getAttachment(HttpAttachments.RESPONSE_TRAILERS) == null) {
                     if (buffer == null) {
                         servletRequestContext.getExchange().getResponseHeaders().put(Headers.CONTENT_LENGTH, "0");
                     } else {
@@ -753,6 +757,11 @@ public class ServletOutputStreamImpl extends ServletOutputStream implements Buff
             //TODO: is this the correct behaviour?
             throw UndertowServletMessages.MESSAGES.streamNotInAsyncMode();
         }
+        if (!asyncIoStarted) {
+            //if we don't add this guard here calls to isReady could start async IO too soon
+            //resulting in a 'resuming + dispatched' message
+            return false;
+        }
         if (!anyAreSet(state, FLAG_READY)) {
             if (channel != null) {
                 channel.resumeWrites();
@@ -787,6 +796,7 @@ public class ServletOutputStreamImpl extends ServletOutputStream implements Buff
         asyncContext.addAsyncTask(new Runnable() {
             @Override
             public void run() {
+                asyncIoStarted = true;
                 if (channel == null) {
                     servletRequestContext.getExchange().getIoThread().execute(new Runnable() {
                         @Override

@@ -140,8 +140,10 @@ public class RequestDispatcherImpl implements RequestDispatcher {
                 });
 
             } finally {
-                    servletRequestContext.setSession(oldSession);
-                    servletRequestContext.setCurrentServletContext(oldServletContext);
+                servletRequestContext.setSession(oldSession);
+                servletRequestContext.setCurrentServletContext(oldServletContext);
+                // update time in old context and run the requestDone for the session
+                servletRequestContext.getCurrentServletContext().updateSessionAccessTime(servletRequestContext.getExchange());
             }
         } else {
             forwardImpl(request, response, servletRequestContext);
@@ -177,6 +179,10 @@ public class RequestDispatcherImpl implements RequestDispatcher {
         request.removeAttribute(INCLUDE_PATH_INFO);
         request.removeAttribute(INCLUDE_QUERY_STRING);
 
+        final String oldURI = requestImpl.getExchange().getRequestURI();
+        final String oldRequestPath = requestImpl.getExchange().getRequestPath();
+        final String oldPath = requestImpl.getExchange().getRelativePath();
+        final ServletPathMatch oldServletPathMatch = requestImpl.getExchange().getAttachment(ServletRequestContext.ATTACHMENT_KEY).getServletPathMatch();
         if (!named) {
 
             //only update if this is the first forward
@@ -247,6 +253,13 @@ public class RequestDispatcherImpl implements RequestDispatcher {
         } finally {
             servletRequestContext.setServletRequest(oldRequest);
             servletRequestContext.setServletResponse(oldResponse);
+            final boolean preservePath = servletRequestContext.getDeployment().getDeploymentInfo().isPreservePathOnForward();
+            if (preservePath) {
+                requestImpl.getExchange().setRelativePath(oldPath);
+                requestImpl.getExchange().getAttachment(ServletRequestContext.ATTACHMENT_KEY).setServletPathMatch(oldServletPathMatch);
+                requestImpl.getExchange().setRequestPath(oldRequestPath);
+                requestImpl.getExchange().setRequestURI(oldURI);
+            }
         }
     }
 
@@ -304,6 +317,8 @@ public class RequestDispatcherImpl implements RequestDispatcher {
                     }
                 });
             } finally {
+                // update time in new context and run the requestDone for the session
+                servletRequestContext.getCurrentServletContext().updateSessionAccessTime(servletRequestContext.getExchange());
                 servletRequestContext.setSession(oldSession);
                 servletRequestContext.setCurrentServletContext(oldServletContext);
             }
@@ -441,12 +456,24 @@ public class RequestDispatcherImpl implements RequestDispatcher {
         final ServletResponse oldResponse = servletRequestContext.getServletResponse();
         servletRequestContext.setDispatcherType(DispatcherType.ERROR);
 
-        //only update if this is the first forward
+        //only update if this is the first forward, add forward attrs too
+        if (request.getAttribute(FORWARD_REQUEST_URI) == null) {
+            requestImpl.setAttribute(FORWARD_REQUEST_URI, requestImpl.getRequestURI());
+            requestImpl.setAttribute(FORWARD_CONTEXT_PATH, requestImpl.getContextPath());
+            requestImpl.setAttribute(FORWARD_SERVLET_PATH, requestImpl.getServletPath());
+            requestImpl.setAttribute(FORWARD_PATH_INFO, requestImpl.getPathInfo());
+            requestImpl.setAttribute(FORWARD_QUERY_STRING, requestImpl.getQueryString());
+        }
         requestImpl.setAttribute(ERROR_REQUEST_URI, requestImpl.getRequestURI());
         requestImpl.setAttribute(ERROR_SERVLET_NAME, servletName);
         if (exception != null) {
-            requestImpl.setAttribute(ERROR_EXCEPTION, exception);
-            requestImpl.setAttribute(ERROR_EXCEPTION_TYPE, exception.getClass());
+            if (exception instanceof ServletException && ((ServletException)exception).getRootCause() != null) {
+                requestImpl.setAttribute(ERROR_EXCEPTION, ((ServletException) exception).getRootCause());
+                requestImpl.setAttribute(ERROR_EXCEPTION_TYPE, ((ServletException) exception).getRootCause().getClass());
+            } else {
+                requestImpl.setAttribute(ERROR_EXCEPTION, exception);
+                requestImpl.setAttribute(ERROR_EXCEPTION_TYPE, exception.getClass());
+            }
         }
         requestImpl.setAttribute(ERROR_MESSAGE, message);
         requestImpl.setAttribute(ERROR_STATUS_CODE, responseImpl.getStatus());

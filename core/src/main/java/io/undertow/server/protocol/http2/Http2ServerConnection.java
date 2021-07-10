@@ -73,6 +73,11 @@ import io.undertow.util.HeaderMap;
 import io.undertow.util.HttpString;
 import io.undertow.util.StatusCodes;
 
+import static io.undertow.protocols.http2.Http2Channel.AUTHORITY;
+import static io.undertow.protocols.http2.Http2Channel.METHOD;
+import static io.undertow.protocols.http2.Http2Channel.PATH;
+import static io.undertow.protocols.http2.Http2Channel.SCHEME;
+
 /**
  * A server connection. There is one connection per request
  *
@@ -208,20 +213,22 @@ public class Http2ServerConnection extends ServerConnection {
     @Override
     public void terminateRequestChannel(HttpServerExchange exchange) {
         if(HttpContinue.requiresContinueResponse(exchange.getRequestHeaders()) && !continueSent) {
-            requestChannel.setIgnoreForceClose(true);
-            requestChannel.close();
-            //if this request requires a 100-continue and it was not sent we have to reset the stream
-            //we do it in a completion listener though, to make sure the response is sent first
-            exchange.addExchangeCompleteListener(new ExchangeCompletionListener() {
-                @Override
-                public void exchangeEvent(HttpServerExchange exchange, NextListener nextListener) {
-                    try {
-                        channel.sendRstStream(responseChannel.getStreamId(), Http2Channel.ERROR_CANCEL);
-                    } finally {
-                        nextListener.proceed();
+            if(requestChannel != null) { //can happen on upgrade
+                requestChannel.setIgnoreForceClose(true);
+                requestChannel.close();
+                //if this request requires a 100-continue and it was not sent we have to reset the stream
+                //we do it in a completion listener though, to make sure the response is sent first
+                exchange.addExchangeCompleteListener(new ExchangeCompletionListener() {
+                    @Override
+                    public void exchangeEvent(HttpServerExchange exchange, NextListener nextListener) {
+                        try {
+                            channel.sendRstStream(responseChannel.getStreamId(), Http2Channel.ERROR_CANCEL);
+                        } finally {
+                            nextListener.proceed();
+                        }
                     }
-                }
-            });
+                });
+            }
         }
     }
 
@@ -326,6 +333,11 @@ public class Http2ServerConnection extends ServerConnection {
         DateUtils.addDateHeaderIfRequired(exchange);
         headers.add(STATUS, exchange.getStatusCode());
         Connectors.flattenCookies(exchange);
+        if(!Connectors.isEntityBodyAllowed(exchange)) {
+            //we are not allowed to send an entity body for some requests
+            exchange.getResponseHeaders().remove(Headers.CONTENT_LENGTH);
+            exchange.getResponseHeaders().remove(Headers.TRANSFER_ENCODING);
+        }
         return originalSinkConduit;
     }
 
@@ -387,7 +399,10 @@ public class Http2ServerConnection extends ServerConnection {
 
     @Override
     public boolean isPushSupported() {
-        return channel.isPushEnabled() && !exchange.getRequestHeaders().contains(Headers.X_DISABLE_PUSH);
+        return channel.isPushEnabled()
+                && !exchange.getRequestHeaders().contains(Headers.X_DISABLE_PUSH)
+                // push is not supported for already pushed streams, just for peer-initiated (odd) ids
+                && responseChannel.getStreamId() % 2 != 0;
     }
 
     @Override
@@ -404,10 +419,10 @@ public class Http2ServerConnection extends ServerConnection {
     public boolean pushResource(String path, HttpString method, HeaderMap requestHeaders, final HttpHandler handler) {
         HeaderMap responseHeaders = new HeaderMap();
         try {
-            requestHeaders.put(Http2ReceiveListener.METHOD, method.toString());
-            requestHeaders.put(Http2ReceiveListener.PATH, path.toString());
-            requestHeaders.put(Http2ReceiveListener.AUTHORITY, exchange.getHostAndPort());
-            requestHeaders.put(Http2ReceiveListener.SCHEME, exchange.getRequestScheme());
+            requestHeaders.put(METHOD, method.toString());
+            requestHeaders.put(PATH, path.toString());
+            requestHeaders.put(AUTHORITY, exchange.getHostAndPort());
+            requestHeaders.put(SCHEME, exchange.getRequestScheme());
 
             Http2HeadersStreamSinkChannel sink = channel.sendPushPromise(responseChannel.getStreamId(), requestHeaders, responseHeaders);
             Http2ServerConnection newConnection = new Http2ServerConnection(channel, sink, getUndertowOptions(), getBufferSize(), rootHandler);
@@ -425,6 +440,12 @@ public class Http2ServerConnection extends ServerConnection {
                 return false;
             }
 
+            sink.setCompletionListener(new ChannelListener<Http2DataStreamSinkChannel>() {
+                @Override
+                public void handleEvent(Http2DataStreamSinkChannel channel) {
+                    Connectors.terminateResponse(exchange);
+                }
+            });
             Connectors.terminateRequest(exchange);
             getIoThread().execute(new Runnable() {
                 @Override

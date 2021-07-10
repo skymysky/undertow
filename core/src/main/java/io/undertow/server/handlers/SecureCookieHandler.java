@@ -25,7 +25,7 @@ import java.util.Set;
 import io.undertow.server.HandlerWrapper;
 import io.undertow.server.HttpHandler;
 import io.undertow.server.HttpServerExchange;
-import io.undertow.server.ResponseCommitListener;
+import io.undertow.server.SecureCookieCommitListener;
 import io.undertow.server.handlers.builder.HandlerBuilder;
 
 /**
@@ -49,16 +49,14 @@ public class SecureCookieHandler implements HttpHandler {
     @Override
     public void handleRequest(HttpServerExchange exchange) throws Exception {
         if(exchange.isSecure()) {
-            exchange.addResponseCommitListener(new ResponseCommitListener() {
-                @Override
-                public void beforeCommit(HttpServerExchange exchange) {
-                    for(Map.Entry<String, Cookie> cookie : exchange.getResponseCookies().entrySet()) {
-                        cookie.getValue().setSecure(true);
-                    }
-                }
-            });
+            exchange.addResponseCommitListener(SecureCookieCommitListener.INSTANCE);
         }
         next.handleRequest(exchange);
+    }
+
+    @Override
+    public String toString() {
+        return "secure-cookie()";
     }
 
     public static class Builder implements HandlerBuilder {

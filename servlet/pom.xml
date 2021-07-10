@@ -25,12 +25,12 @@
     <parent>
         <groupId>io.undertow</groupId>
         <artifactId>undertow-parent</artifactId>
-        <version>2.0.4.Final-SNAPSHOT</version>
+        <version>2.2.9.Final-SNAPSHOT</version>
     </parent>
 
     <groupId>io.undertow</groupId>
     <artifactId>undertow-servlet</artifactId>
-    <version>2.0.4.Final-SNAPSHOT</version>
+    <version>2.2.9.Final-SNAPSHOT</version>
 
     <name>Undertow Servlet</name>
 
@@ -63,14 +63,7 @@
 
         <dependency>
             <groupId>org.jboss.spec.javax.annotation</groupId>
-            <artifactId>jboss-annotations-api_1.2_spec</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>org.osgi</groupId>
-            <artifactId>org.osgi.core</artifactId>
-            <optional>true</optional>
-            <scope>provided</scope>
+            <artifactId>jboss-annotations-api_1.3_spec</artifactId>
         </dependency>
 
         <!-- Test dependencies -->
@@ -118,11 +111,11 @@
             <scope>test</scope>
         </dependency>
 
-        <dependency>
+        <!--<dependency>
             <groupId>org.eclipse.jetty.alpn</groupId>
             <artifactId>alpn-api</artifactId>
             <scope>provided</scope>
-        </dependency>
+        </dependency>-->
 
         <dependency>
             <groupId>org.wildfly.openssl</groupId>
@@ -176,11 +169,10 @@
                                     io.undertow.servlet*;version=${project.version};-noimport:=true
                                 </Export-Package>
                                 <Import-Package>
-                                    !sun.*, *
+                                    javax.annotation.security;version="[1.2,3)",
+                                    !sun.*,
+                                    *
                                 </Import-Package>
-                                <Bundle-Activator>
-                                    io.undertow.servlet.osgi.Activator
-                                </Bundle-Activator>
                             </instructions>
                         </configuration>
                     </execution>

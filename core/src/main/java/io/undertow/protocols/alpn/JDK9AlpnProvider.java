@@ -22,6 +22,8 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLParameters;
 
@@ -38,18 +40,41 @@ public class JDK9AlpnProvider implements ALPNProvider {
 
 
     public static final JDK9ALPNMethods JDK_9_ALPN_METHODS;
+    private static final String JDK8_SUPPORT_PROPERTY = "io.undertow.protocols.alpn.jdk8";
 
     static {
         JDK_9_ALPN_METHODS = AccessController.doPrivileged(new PrivilegedAction<JDK9ALPNMethods>() {
             @Override
             public JDK9ALPNMethods run() {
                 try {
-                    Method setApplicationProtocols = SSLParameters.class.getMethod("setApplicationProtocols", String[].class);
-                    Method getApplicationProtocol = SSLEngine.class.getMethod("getApplicationProtocol");
-                    UndertowLogger.ROOT_LOGGER.debug("Using JDK9 ALPN");
-                    return new JDK9ALPNMethods(setApplicationProtocols, getApplicationProtocol);
+                    final String javaVersion = System.getProperty("java.specification.version");
+                    int vmVersion = 8;
+                    try {
+                        final Matcher matcher = Pattern.compile("^(?:1\\.)?(\\d+)$").matcher(javaVersion);
+                        if (matcher.find()) {
+                            vmVersion = Integer.parseInt(matcher.group(1));
+                        }
+                    } catch (Exception ignore) {
+                    }
+                    // There was a backport of the ALPN support to Java 8 in rev 251. If a non-JDK implementation of the
+                    // SSLEngine is used these methods throw an UnsupportedOperationException by default. However the
+                    // methods would exist and could result in issues. By default it seems most JDK's have a working
+                    // implementation. However since this was introduced in a micro release we should have a way to
+                    // disable this feature. Setting the io.undertow.protocols.alpn.jdk8 to false will workaround the
+                    // possible issue where the SSLEngine does not have an implementation of these methods.
+                    final String value = System.getProperty(JDK8_SUPPORT_PROPERTY);
+                    final boolean addSupportIfExists = value == null || value.trim().isEmpty() || Boolean.parseBoolean(value);
+                    if (vmVersion > 8 || addSupportIfExists) {
+                        Method setApplicationProtocols = SSLParameters.class.getMethod("setApplicationProtocols", String[].class);
+                        Method getApplicationProtocol = SSLEngine.class.getMethod("getApplicationProtocol");
+                        UndertowLogger.ROOT_LOGGER.debug("Using JDK9 ALPN");
+                        return new JDK9ALPNMethods(setApplicationProtocols, getApplicationProtocol);
+                    }
+                    UndertowLogger.ROOT_LOGGER.debugf("It's not certain ALPN support was found. " +
+                            "Provider %s will be disabled.", JDK9AlpnProvider.class.getName());
+                    return null;
                 } catch (Exception e) {
-                    UndertowLogger.ROOT_LOGGER.debug("JDK9 ALPN not supported", e);
+                    UndertowLogger.ROOT_LOGGER.debug("JDK9 ALPN not supported");
                     return null;
                 }
             }
@@ -102,7 +127,7 @@ public class JDK9AlpnProvider implements ALPNProvider {
 
     @Override
     public int getPriority() {
-        return 300;
+        return 200;
     }
 
     @Override

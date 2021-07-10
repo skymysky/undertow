@@ -53,7 +53,6 @@ public class MimeMappings {
         defaultMappings.put("tsv", "text/tab-separated-values");
         defaultMappings.put("etx", "text/x-setext");
         defaultMappings.put("json", "application/json");
-        defaultMappings.put("ps", "application/x-postscript");
         defaultMappings.put("class", "application/java");
         defaultMappings.put("csh", "application/x-csh");
         defaultMappings.put("sh", "application/x-sh");
@@ -96,6 +95,7 @@ public class MimeMappings {
         defaultMappings.put("z", "application/x-compress");
         defaultMappings.put("hqx", "application/mac-binhex40");
         defaultMappings.put("mif", "application/x-mif");
+        defaultMappings.put("ico", "image/x-icon");
         defaultMappings.put("ief", "image/ief");
         defaultMappings.put("tiff", "image/tiff");
         defaultMappings.put("tif", "image/tiff");
@@ -125,6 +125,7 @@ public class MimeMappings {
         defaultMappings.put("avx", "video/x-rad-screenplay");
         defaultMappings.put("wrl", "x-world/x-vrml");
         defaultMappings.put("mpv2", "video/mpeg2");
+        defaultMappings.put("jnlp", "application/x-java-jnlp-file");
 
         defaultMappings.put("eot", "application/vnd.ms-fontobject");
         defaultMappings.put("woff", "application/font-woff");

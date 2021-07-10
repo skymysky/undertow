@@ -23,6 +23,9 @@ import io.undertow.server.HttpHandler;
 import io.undertow.server.HttpServerExchange;
 import io.undertow.server.handlers.cache.LRUCache;
 import io.undertow.util.PathMatcher;
+import java.util.Map.Entry;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Handler that dispatches to a given handler based of a prefix match of the path.
@@ -63,6 +66,16 @@ public class PathHandler implements HttpHandler {
     }
 
     @Override
+    public String toString() {
+        Set<Entry<String,HttpHandler>> paths = pathMatcher.getPaths().entrySet();
+        if (paths.size() == 1) {
+            return "path( " + paths.toArray()[0] + " )";
+        } else {
+            return "path( {" + paths.stream().map(s -> s.getValue().toString()).collect(Collectors.joining(", ")) + "} )";
+        }
+    }
+
+    @Override
     public void handleRequest(HttpServerExchange exchange) throws Exception {
         PathMatcher.PathMatch<HttpHandler> match = null;
         boolean hit = false;
@@ -86,10 +99,7 @@ public class PathHandler implements HttpHandler {
             exchange.setResolvedPath(match.getMatched());
         } else {
             //already something in the resolved path
-            StringBuilder sb = new StringBuilder(exchange.getResolvedPath().length() + match.getMatched().length());
-            sb.append(exchange.getResolvedPath());
-            sb.append(match.getMatched());
-            exchange.setResolvedPath(sb.toString());
+            exchange.setResolvedPath(exchange.getResolvedPath() + match.getMatched());
         }
         match.getValue().handleRequest(exchange);
     }
@@ -98,7 +108,7 @@ public class PathHandler implements HttpHandler {
      * Adds a path prefix and a handler for that path. If the path does not start
      * with a / then one will be prepended.
      * <p>
-     * The match is done on a prefix bases, so registering /foo will also match /bar. Exact
+     * The match is done on a prefix bases, so registering /foo will also match /foo/bar. Exact
      * path matches are taken into account first.
      * <p>
      * If / is specified as the path then it will replace the default handler.
@@ -119,7 +129,7 @@ public class PathHandler implements HttpHandler {
      * <p>
      * The match is done on a prefix bases, so registering /foo will also match /foo/bar.
      * Though exact path matches are taken into account before prefix path matches. So
-     * if an exact path match exists it's  handler will be triggered.
+     * if an exact path match exists its handler will be triggered.
      * <p>
      * If / is specified as the path then it will replace the default handler.
      *

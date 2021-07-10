@@ -18,6 +18,31 @@
 
 package io.undertow.servlet.spec;
 
+import java.io.IOException;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
+
+import javax.servlet.AsyncContext;
+import javax.servlet.AsyncEvent;
+import javax.servlet.AsyncListener;
+import javax.servlet.DispatcherType;
+import javax.servlet.RequestDispatcher;
+import javax.servlet.ServletContext;
+import javax.servlet.ServletException;
+import javax.servlet.ServletRequest;
+import javax.servlet.ServletResponse;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
+import org.xnio.IoUtils;
+import org.xnio.XnioExecutor;
+
 import io.undertow.UndertowLogger;
 import io.undertow.server.Connectors;
 import io.undertow.server.ExchangeCompletionListener;
@@ -36,34 +61,10 @@ import io.undertow.servlet.api.ServletDispatcher;
 import io.undertow.servlet.handlers.ServletDebugPageHandler;
 import io.undertow.servlet.handlers.ServletPathMatch;
 import io.undertow.servlet.handlers.ServletRequestContext;
-import io.undertow.util.CanonicalPathUtils;
 import io.undertow.util.Headers;
 import io.undertow.util.SameThreadExecutor;
 import io.undertow.util.StatusCodes;
 import io.undertow.util.WorkerUtils;
-import org.xnio.IoUtils;
-import org.xnio.XnioExecutor;
-
-import java.io.IOException;
-import java.util.ArrayDeque;
-import java.util.Deque;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.Executor;
-import java.util.concurrent.TimeUnit;
-import javax.servlet.AsyncContext;
-import javax.servlet.AsyncEvent;
-import javax.servlet.AsyncListener;
-import javax.servlet.DispatcherType;
-import javax.servlet.RequestDispatcher;
-import javax.servlet.ServletContext;
-import javax.servlet.ServletException;
-import javax.servlet.ServletRequest;
-import javax.servlet.ServletResponse;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
 
 /**
  * @author Stuart Douglas
@@ -94,6 +95,7 @@ public class AsyncContextImpl implements AsyncContext {
     private final Deque<Runnable> asyncTaskQueue = new ArrayDeque<>();
     private boolean processingAsyncTask = false;
     private volatile boolean complete = false;
+    private volatile boolean completedBeforeInitialRequestDone = false;
 
     public AsyncContextImpl(final HttpServerExchange exchange, final ServletRequest servletRequest, final ServletResponse servletResponse, final ServletRequestContext servletRequestContext, boolean requestSupplied, final AsyncContextImpl previousAsyncContext) {
         this.exchange = exchange;
@@ -106,7 +108,6 @@ public class AsyncContextImpl implements AsyncContext {
         exchange.dispatch(SameThreadExecutor.INSTANCE, new Runnable() {
             @Override
             public void run() {
-                servletRequestContext.getOriginalRequest().setAsyncCancelled(false);
                 exchange.setDispatchExecutor(null);
                 initialRequestDone();
             }
@@ -143,6 +144,10 @@ public class AsyncContextImpl implements AsyncContext {
                 servletResponse instanceof HttpServletResponseImpl;
     }
 
+    public boolean isInitialRequestDone() {
+        return initialRequestDone;
+    }
+
     @Override
     public void dispatch() {
         if (dispatched) {
@@ -173,7 +178,8 @@ public class AsyncContextImpl implements AsyncContext {
                 //this should never happen
                 throw UndertowServletMessages.MESSAGES.couldNotFindContextToDispatchTo(requestImpl.getOriginalContextPath());
             }
-            String toDispatch = CanonicalPathUtils.canonicalize(requestImpl.getOriginalRequestURI()).substring(requestImpl.getOriginalContextPath().length());
+            //UNDERTOW-1591 use original, decoded value to dispatch, this should match: ServletInitialHandler.handleRequest
+            String toDispatch = requestImpl.getExchange().getRelativePath();
             String qs = requestImpl.getOriginalQueryString();
             if (qs != null && !qs.isEmpty()) {
                 toDispatch = toDispatch + "?" + qs;
@@ -189,6 +195,9 @@ public class AsyncContextImpl implements AsyncContext {
                 Connectors.executeRootHandler(new HttpHandler() {
                     @Override
                     public void handleRequest(final HttpServerExchange exchange) throws Exception {
+                        ServletRequestContext src = exchange.getAttachment(ServletRequestContext.ATTACHMENT_KEY);
+                        src.setServletRequest(servletRequest);
+                        src.setServletResponse(servletResponse);
                         servletDispatcher.dispatchToPath(exchange, pathInfo, DispatcherType.ASYNC);
                     }
                 }, exchange);
@@ -272,7 +281,7 @@ public class AsyncContextImpl implements AsyncContext {
             timeoutKey = null;
         }
         if (!dispatched) {
-            completeInternal();
+            completeInternal(false);
         } else {
             onAsyncComplete();
         }
@@ -281,52 +290,27 @@ public class AsyncContextImpl implements AsyncContext {
         }
     }
 
-    public synchronized void completeInternal() {
-        servletRequestContext.getOriginalRequest().asyncRequestDispatched();
+    public synchronized void completeInternal(boolean forceComplete) {
         Thread currentThread = Thread.currentThread();
-        if (!initialRequestDone && currentThread == initiatingThread) {
-            servletRequestContext.getOriginalRequest().setAsyncCancelled(true);
-            //TODO: according to the spec we should delay this until the container initiated thread has returned?
-
-            onAsyncComplete();
+        if (!forceComplete && !initialRequestDone && currentThread == initiatingThread) {
+            completedBeforeInitialRequestDone = true;
             if (dispatched) {
                 throw UndertowServletMessages.MESSAGES.asyncRequestAlreadyDispatched();
             }
-            exchange.unDispatch();
-            dispatched = true;
-            initialRequestDone();
         } else {
-            if (currentThread == exchange.getIoThread()) {
+            servletRequestContext.getOriginalRequest().asyncRequestDispatched();
+            if (forceComplete || currentThread == exchange.getIoThread()) {
                 //the thread safety semantics here are a bit weird.
                 //basically if we are doing async IO we can't do a dispatch here, as then the IO thread can be racing
                 //with the dispatch thread.
                 //at all other times the dispatch is desirable
-                onAsyncComplete();
-                HttpServletResponseImpl response = servletRequestContext.getOriginalResponse();
-                response.responseDone();
-                try {
-                    servletRequestContext.getOriginalRequest().closeAndDrainRequest();
-                    servletRequestContext.getOriginalRequest().clearAttributes();
-                } catch (IOException e) {
-                    UndertowLogger.REQUEST_IO_LOGGER.ioException(e);
-                } catch (Throwable t) {
-                    UndertowLogger.REQUEST_IO_LOGGER.handleUnexpectedFailure(t);
-                }
+                onAsyncCompleteAndRespond();
             } else {
+                servletRequestContext.getOriginalRequest().asyncRequestDispatched();
                 doDispatch(new Runnable() {
                     @Override
                     public void run() {
-                        onAsyncComplete();
-
-                        HttpServletResponseImpl response = servletRequestContext.getOriginalResponse();
-                        response.responseDone();
-                        try {
-                            servletRequestContext.getOriginalRequest().closeAndDrainRequest();
-                        } catch (IOException e) {
-                            UndertowLogger.REQUEST_IO_LOGGER.ioException(e);
-                        } catch (Throwable t) {
-                            UndertowLogger.REQUEST_IO_LOGGER.handleUnexpectedFailure(t);
-                        }
+                        onAsyncCompleteAndRespond();
                     }
                 });
             }
@@ -369,6 +353,10 @@ public class AsyncContextImpl implements AsyncContext {
 
     public boolean isDispatched() {
         return dispatched;
+    }
+
+    public boolean isCompletedBeforeInitialRequestDone() {
+        return completedBeforeInitialRequestDone;
     }
 
     @Override
@@ -467,6 +455,9 @@ public class AsyncContextImpl implements AsyncContext {
         initiatingThread = null;
     }
 
+    public synchronized void initialRequestFailed() {
+        initialRequestDone = true;
+    }
 
     private synchronized void doDispatch(final Runnable runnable) {
         if (dispatched) {
@@ -484,6 +475,12 @@ public class AsyncContextImpl implements AsyncContext {
         if (timeoutKey != null) {
             timeoutKey.remove();
         }
+    }
+
+    public void handleCompletedBeforeInitialRequestDone() {
+        assert completedBeforeInitialRequestDone;
+        completeInternal(true);
+        dispatched = true;
     }
 
 
@@ -598,6 +595,32 @@ public class AsyncContextImpl implements AsyncContext {
         }
     }
 
+    private void onAsyncCompleteAndRespond() {
+        final HttpServletResponseImpl response = servletRequestContext.getOriginalResponse();
+        try {
+            onAsyncComplete();
+        } catch (RuntimeException e) {
+            //handleError(e);
+            /*try {
+                response.sendError(StatusCodes.INTERNAL_SERVER_ERROR,
+                        e.getMessage());
+            } catch (IOException ioException) {
+                UndertowLogger.REQUEST_IO_LOGGER.ioException(ioException);
+                response.responseDone();
+            }
+            throw e;*/
+            UndertowServletLogger.REQUEST_LOGGER.failureDispatchingAsyncEvent(e);
+        } finally {
+            response.responseDone();
+            try {
+                servletRequestContext.getOriginalRequest().closeAndDrainRequest();
+            } catch (IOException e) {
+                UndertowLogger.REQUEST_IO_LOGGER.ioException(e);
+            } catch (Throwable t) {
+                UndertowLogger.REQUEST_IO_LOGGER.handleUnexpectedFailure(t);
+            }
+        }
+    }
 
     private void onAsyncComplete() {
         final boolean setupRequired = SecurityActions.currentServletRequestContext() == null;

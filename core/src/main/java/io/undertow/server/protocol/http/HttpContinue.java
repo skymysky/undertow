@@ -91,6 +91,9 @@ public class HttpContinue {
         return false;
     }
 
+    public static boolean isContinueResponseSent(HttpServerExchange exchange) {
+        return exchange.getAttachment(ALREADY_SENT) != null;
+    }
 
     /**
      * Sends a continuation using async IO, and calls back when it is complete.
@@ -163,6 +166,16 @@ public class HttpContinue {
                 responseChannel.awaitWritable(time, timeUnit);
             }
         };
+    }
+
+    /**
+     * Marks a continue response as already having been sent. In general this should only be used
+     * by low level handlers than need fine grained control over the continue response.
+     *
+     * @param exchange The exchange
+     */
+    public static void markContinueResponseSent(HttpServerExchange exchange) {
+        exchange.putAttachment(ALREADY_SENT, true);
     }
 
     /**

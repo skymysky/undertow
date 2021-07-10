@@ -1,28 +1,30 @@
-<!-- This file specifies a findbugs filter for excluding reports that
+<!-- This file specifies a spotbugs filter for excluding reports that
      should not be considered errors.
 
      The format of this file is documented at:
 
-       http://findbugs.sourceforge.net/manual/filter.html
+       https://spotbugs.readthedocs.io/en/latest/filter.html
 
      When possible, please specify the full names of the bug codes,
      using the pattern attribute, to make it clearer what reports are
      being suppressed.  You can find a listing of codes at:
 
-       http://findbugs.sourceforge.net/bugDescriptions.html
+       https://spotbugs.readthedocs.io/en/latest/bugDescriptions.html
   -->
 
 <FindBugsFilter>
 
-    <!-- Ignore checking for generated parser classes -->
     <Match>
         <Or>
+            <!-- Ignore checking for generated parser classes -->
             <Class name="io.undertow.client.http.HttpResponseParser$$generated"/>
             <Class name="io.undertow.server.protocol.http.HttpRequestParser$$generated"/>
+            <!-- Ignore checking for generated JMH benchmarking classes -->
+            <Package name="io.undertow.benchmarks.generated"/>
         </Or>
     </Match>
 
-    <!-- Ignore findbugs reports from incomplete detectors -->
+    <!-- Ignore spotbugs reports from incomplete detectors -->
     <Match>
         <Bug pattern="TESTING"/>
     </Match>
@@ -54,6 +56,16 @@
             <And>
                 <Class name="io.undertow.server.protocol.ajp.AjpRequestParseState"/>
                 <Field name="dataSize"/>
+            </And>
+        </Or>
+    </Match>
+
+    <!-- False positives => ignoring, the field is regular boolean, no complex bitwise operation is in place here -->
+    <Match>
+        <Bug pattern="BIT_IOR"/>
+        <Or>
+            <And>
+                <Class name="io.undertow.conduits.AbstractFixedLengthStreamSinkConduit"/>
             </And>
         </Or>
     </Match>
@@ -176,6 +188,12 @@
                 <Class name="io.undertow.util.FlexBase64$Encoder"/>
                 <Method name="encodeString"/>
             </And>
+
+            <!-- Intentional not throwing exception -->
+            <And>
+                <Class name="io.undertow.protocols.alpn.JDK9AlpnProvider$1"/>
+                <Method name="run"/>
+            </And>
         </Or>
     </Match>
 
@@ -238,6 +256,7 @@
             <Class name="io.undertow.servlet.api.LoginConfig"/>
             <Class name="io.undertow.servlet.api.FilterInfo"/>
             <Class name="io.undertow.servlet.api.ServletInfo"/>
+            <Class name="io.undertow.websockets.jsr.WebSocketDeploymentInfo"/>
         </Or>
     </Match>
 
@@ -258,4 +277,35 @@
         <Bug pattern="RV_RETURN_VALUE_IGNORED_NO_SIDE_EFFECT"/>
     </Match>
 
+    <Match>
+        <Bug pattern="DLS_DEAD_LOCAL_STORE"/>
+        <Class name="io.undertow.predicate.PredicatesHandler$RestartHandlerBuilder$1$1"/>
+        <Method name="handleRequest"/>
+    </Match>
+
+    <!-- Method is actually fine-->
+    <Match>
+        <Bug pattern="NP_NONNULL_PARAM_VIOLATION"/>
+        <Class name="io.undertow.server.protocol.http.AlpnOpenListener$AlpnConnectionListener"/>
+    </Match>
+    <!-- Field can be modified by code between the first check-->
+    <Match>
+        <Bug pattern="RCN_REDUNDANT_NULLCHECK_WOULD_HAVE_BEEN_A_NPE"/>
+        <Class name="io.undertow.client.http.HttpClientConnection$ClientReadListener" />
+    </Match>
+    <!-- Comparison of cookies path and domain with == before invoking equals is necessary because
+         both could be null; only if the == fails we check for one of them != null && equals the other -->
+    <Match>
+        <Bug pattern="ES_COMPARING_STRINGS_WITH_EQ"/>
+        <Class name="io.undertow.servlet.spec.HttpServletResponseImpl"/>
+        <Method name="addCookie"/>
+    </Match>
+    <!-- UNDERTOW-1839: we don't want to increase contention to synchronize all blocks that access the fields:
+         engine, invokingReadListenerHandshake, readListenerInvocationCount. The less contention the better,
+         the goal of the new synchronized blocks is to prevent writing to buffers that are being released
+         by another thread -->
+    <Match>
+        <Bug pattern="IS2_INCONSISTENT_SYNC"/>
+        <Class name="io.undertow.protocols.ssl.SslConduit"/>
+    </Match>
 </FindBugsFilter>

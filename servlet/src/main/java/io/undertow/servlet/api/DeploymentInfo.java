@@ -20,10 +20,10 @@ package io.undertow.servlet.api;
 
 import java.io.File;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -35,6 +35,7 @@ import java.util.concurrent.Executor;
 
 import javax.servlet.DispatcherType;
 import javax.servlet.MultipartConfigElement;
+import javax.servlet.ServletContextListener;
 import javax.servlet.descriptor.JspConfigDescriptor;
 
 import io.undertow.security.api.AuthenticationMechanism;
@@ -62,15 +63,27 @@ import io.undertow.util.ImmediateAuthenticationMechanismFactory;
  */
 public class DeploymentInfo implements Cloneable {
 
+    private static final int DEFAULT_MAJOR_VERSION;
+
+    static {
+        // UNDERTOW-1810. It is possible at runtime that the class executing this logic has been bytecode
+        // transformed to use a different variant of the Servlet API than it was compiled against,
+        // i.e. EE 9's Servlet 5 instead of EE 8's Servlet 4. Since 4 and 5 are functionally equivalent
+        // except for the package rename, support such a scenario by setting the default major spec
+        // version that is supported based on the package name of a Servlet API class.
+        Package servletPackage = ServletContextListener.class.getPackage();
+        DEFAULT_MAJOR_VERSION = servletPackage.getName().startsWith("jakarta.") ? 5 : 4;
+    }
+
     private String deploymentName;
     private String displayName;
     private String contextPath;
     private ClassLoader classLoader;
     private ResourceManager resourceManager = ResourceManager.EMPTY_RESOURCE_MANAGER;
     private ClassIntrospecter classIntrospecter = DefaultClassIntrospector.INSTANCE;
-    private int majorVersion = 4;
+    private int majorVersion = DEFAULT_MAJOR_VERSION;
     private int minorVersion = 0;
-    private int containerMajorVersion = 4;
+    private int containerMajorVersion = DEFAULT_MAJOR_VERSION;
     private int containerMinorVersion = 0;
     private Executor executor;
     private Executor asyncExecutor;
@@ -107,6 +120,7 @@ public class DeploymentInfo implements Cloneable {
     private boolean escapeErrorMessage = true;
     private boolean sendCustomReasonPhraseOnError = false;
     private boolean useCachedAuthenticationMechanism = true;
+    private boolean preservePathOnForward = true;
     private AuthenticationMode authenticationMode = AuthenticationMode.PRO_ACTIVE;
     private ExceptionHandler exceptionHandler;
     private final Map<String, ServletInfo> servlets = new HashMap<>();
@@ -192,6 +206,8 @@ public class DeploymentInfo implements Cloneable {
     private boolean securityDisabled;
 
     private boolean checkOtherSessionManagers = true;
+
+    private final List<ServletContextListener> deploymentCompleteListeners = new ArrayList<>();
 
     /**
      * A map of content encoding to file extension for pre compressed resource (e.g. gzip -> .gz)
@@ -361,7 +377,7 @@ public class DeploymentInfo implements Cloneable {
     }
 
     public Map<String, ServletInfo> getServlets() {
-        return Collections.unmodifiableMap(servlets);
+        return servlets;
     }
 
 
@@ -385,7 +401,7 @@ public class DeploymentInfo implements Cloneable {
     }
 
     public Map<String, FilterInfo> getFilters() {
-        return Collections.unmodifiableMap(filters);
+        return filters;
     }
 
     public DeploymentInfo addFilterUrlMapping(final String filterName, final String mapping, DispatcherType dispatcher) {
@@ -411,7 +427,7 @@ public class DeploymentInfo implements Cloneable {
     public List<FilterMappingInfo> getFilterMappings() {
         final ArrayList<FilterMappingInfo> ret = new ArrayList<>(filterUrlMappings);
         ret.addAll(filterServletNameMappings);
-        return Collections.unmodifiableList(ret);
+        return ret;
     }
 
 
@@ -452,19 +468,34 @@ public class DeploymentInfo implements Cloneable {
         return this;
     }
 
-    public DeploymentInfo addServletContainerInitalizer(final ServletContainerInitializerInfo servletContainerInitializer) {
+    public DeploymentInfo addServletContainerInitializer(final ServletContainerInitializerInfo servletContainerInitializer) {
         servletContainerInitializers.add(servletContainerInitializer);
         return this;
     }
 
-    public DeploymentInfo addServletContainerInitalizers(final ServletContainerInitializerInfo... servletContainerInitializer) {
+    @Deprecated // UNDERTOW-1375 Method name is misspelled
+    public DeploymentInfo addServletContainerInitalizer(final ServletContainerInitializerInfo servletContainerInitializer) {
+        return addServletContainerInitializer(servletContainerInitializer);
+    }
+
+    public DeploymentInfo addServletContainerInitializers(final ServletContainerInitializerInfo... servletContainerInitializer) {
         servletContainerInitializers.addAll(Arrays.asList(servletContainerInitializer));
         return this;
     }
 
-    public DeploymentInfo addServletContainerInitalizers(final List<ServletContainerInitializerInfo> servletContainerInitializer) {
+    @Deprecated // UNDERTOW-1375 Method name is misspelled
+    public DeploymentInfo addServletContainerInitalizers(final ServletContainerInitializerInfo... servletContainerInitializer) {
+        return addServletContainerInitializers(servletContainerInitializer);
+    }
+
+    public DeploymentInfo addServletContainerInitializers(final List<ServletContainerInitializerInfo> servletContainerInitializer) {
         servletContainerInitializers.addAll(servletContainerInitializer);
         return this;
+    }
+
+    @Deprecated // UNDERTOW-1375 Method name is misspelled
+    public DeploymentInfo addServletContainerInitalizers(final List<ServletContainerInitializerInfo> servletContainerInitializers) {
+        return addServletContainerInitializers(servletContainerInitializers);
     }
 
     public List<ServletContainerInitializerInfo> getServletContainerInitializers() {
@@ -501,7 +532,7 @@ public class DeploymentInfo implements Cloneable {
     }
 
     public Map<String, String> getInitParameters() {
-        return Collections.unmodifiableMap(initParameters);
+        return initParameters;
     }
 
     public DeploymentInfo addServletContextAttribute(final String name, final Object value) {
@@ -510,7 +541,7 @@ public class DeploymentInfo implements Cloneable {
     }
 
     public Map<String, Object> getServletContextAttributes() {
-        return Collections.unmodifiableMap(servletContextAttributes);
+        return servletContextAttributes;
     }
 
     public DeploymentInfo addWelcomePage(final String welcomePage) {
@@ -529,7 +560,7 @@ public class DeploymentInfo implements Cloneable {
     }
 
     public List<String> getWelcomePages() {
-        return Collections.unmodifiableList(welcomePages);
+        return welcomePages;
     }
 
     public DeploymentInfo addErrorPage(final ErrorPage errorPage) {
@@ -548,7 +579,7 @@ public class DeploymentInfo implements Cloneable {
     }
 
     public List<ErrorPage> getErrorPages() {
-        return Collections.unmodifiableList(errorPages);
+        return errorPages;
     }
 
     public DeploymentInfo addMimeMapping(final MimeMapping mimeMappings) {
@@ -567,7 +598,7 @@ public class DeploymentInfo implements Cloneable {
     }
 
     public List<MimeMapping> getMimeMappings() {
-        return Collections.unmodifiableList(mimeMappings);
+        return mimeMappings;
     }
 
 
@@ -587,7 +618,7 @@ public class DeploymentInfo implements Cloneable {
     }
 
     public List<SecurityConstraint> getSecurityConstraints() {
-        return Collections.unmodifiableList(securityConstraints);
+        return securityConstraints;
     }
 
     public Executor getExecutor() {
@@ -635,6 +666,18 @@ public class DeploymentInfo implements Cloneable {
 
     public Path getTempPath() {
         return tempDir;
+    }
+
+    /**
+     * @return Returns the {@link #getTempDir() temp directory path} if it's
+     * not null, else returns the system level temporary directory path
+     * pointed to by the Java system property {@code java.io.tmpdir}
+     */
+    public Path requireTempPath() {
+        if (tempDir != null) {
+            return tempDir;
+        }
+        return Paths.get(SecurityActions.getSystemProperty("java.io.tmpdir"));
     }
 
     public DeploymentInfo setTempDir(final File tempDir) {
@@ -735,7 +778,7 @@ public class DeploymentInfo implements Cloneable {
     }
 
     public Set<String> getSecurityRoles() {
-        return Collections.unmodifiableSet(securityRoles);
+        return securityRoles;
     }
 
     /**
@@ -751,7 +794,7 @@ public class DeploymentInfo implements Cloneable {
     }
 
     public List<HandlerWrapper> getOuterHandlerChainWrappers() {
-        return Collections.unmodifiableList(outerHandlerChainWrappers);
+        return outerHandlerChainWrappers;
     }
 
     /**
@@ -766,7 +809,7 @@ public class DeploymentInfo implements Cloneable {
     }
 
     public List<HandlerWrapper> getInnerHandlerChainWrappers() {
-        return Collections.unmodifiableList(innerHandlerChainWrappers);
+        return innerHandlerChainWrappers;
     }
 
     public DeploymentInfo addInitialHandlerChainWrapper(final HandlerWrapper wrapper) {
@@ -775,7 +818,7 @@ public class DeploymentInfo implements Cloneable {
     }
 
     public List<HandlerWrapper> getInitialHandlerChainWrappers() {
-        return Collections.unmodifiableList(initialHandlerChainWrappers);
+        return initialHandlerChainWrappers;
     }
 
 
@@ -812,7 +855,7 @@ public class DeploymentInfo implements Cloneable {
     }
 
     public List<HandlerWrapper> getSecurityWrappers() {
-        return Collections.unmodifiableList(securityWrappers);
+        return securityWrappers;
     }
 
     public DeploymentInfo addNotificationReceiver(final NotificationReceiver notificationReceiver) {
@@ -831,7 +874,7 @@ public class DeploymentInfo implements Cloneable {
     }
 
     public List<NotificationReceiver> getNotificationReceivers() {
-        return Collections.unmodifiableList(notificationReceivers);
+        return notificationReceivers;
     }
 
     public ConcurrentMap<String, Object> getServletContextAttributeBackingMap() {
@@ -956,7 +999,7 @@ public class DeploymentInfo implements Cloneable {
     }
 
     public Map<String, Set<String>> getPrincipalVersusRolesMap() {
-        return Collections.unmodifiableMap(principalVersusRolesMap);
+        return principalVersusRolesMap;
     }
 
     /**
@@ -1032,7 +1075,7 @@ public class DeploymentInfo implements Cloneable {
     }
 
     public Map<String, AuthenticationMechanismFactory> getAuthenticationMechanisms() {
-        return Collections.unmodifiableMap(authenticationMechanisms);
+        return authenticationMechanisms;
     }
 
     /**
@@ -1126,7 +1169,7 @@ public class DeploymentInfo implements Cloneable {
     }
 
     public List<LifecycleInterceptor> getLifecycleInterceptors() {
-        return Collections.unmodifiableList(lifecycleInterceptors);
+        return lifecycleInterceptors;
     }
 
     /**
@@ -1170,7 +1213,7 @@ public class DeploymentInfo implements Cloneable {
     }
 
     public List<SessionListener> getSessionListeners() {
-        return Collections.unmodifiableList(sessionListeners);
+        return sessionListeners;
     }
 
     public AuthenticationMode getAuthenticationMode() {
@@ -1327,7 +1370,7 @@ public class DeploymentInfo implements Cloneable {
     }
 
     public Map<String, String> getPreCompressedResources() {
-        return Collections.unmodifiableMap(preCompressedResources);
+        return preCompressedResources;
     }
 
     public int getContainerMajorVersion() {
@@ -1346,6 +1389,31 @@ public class DeploymentInfo implements Cloneable {
     public DeploymentInfo setContainerMinorVersion(int containerMinorVersion) {
         this.containerMinorVersion = containerMinorVersion;
         return this;
+    }
+
+    public boolean isPreservePathOnForward() {
+        return preservePathOnForward;
+    }
+
+    public void setPreservePathOnForward(boolean preservePathOnForward) {
+        this.preservePathOnForward = preservePathOnForward;
+    }
+
+    /**
+     * Add's a listener that is only invoked once all other deployment steps have been completed
+     *
+     * The listeners <code>contextDestroyed</code> method will be called after all undeployment steps are undertaken
+     *
+     * @param servletContextListener
+     * @return
+     */
+    public DeploymentInfo addDeploymentCompleteListener(ServletContextListener servletContextListener) {
+        deploymentCompleteListeners.add(servletContextListener);
+        return this;
+    }
+
+    public List<ServletContextListener> getDeploymentCompleteListeners() {
+        return deploymentCompleteListeners;
     }
 
     @Override
@@ -1409,7 +1477,9 @@ public class DeploymentInfo implements Cloneable {
         info.invalidateSessionOnLogout = invalidateSessionOnLogout;
         info.defaultCookieVersion = defaultCookieVersion;
         info.sessionPersistenceManager = sessionPersistenceManager;
-        info.principalVersusRolesMap.putAll(principalVersusRolesMap);
+        for (Map.Entry<String, Set<String>> e : principalVersusRolesMap.entrySet()) {
+            info.principalVersusRolesMap.put(e.getKey(), new HashSet<>(e.getValue()));
+        }
         info.ignoreFlush = ignoreFlush;
         info.authorizationManager = authorizationManager;
         info.authenticationMechanisms.putAll(authenticationMechanisms);
@@ -1440,6 +1510,8 @@ public class DeploymentInfo implements Cloneable {
         info.preCompressedResources.putAll(preCompressedResources);
         info.containerMajorVersion = containerMajorVersion;
         info.containerMinorVersion = containerMinorVersion;
+        info.deploymentCompleteListeners.addAll(deploymentCompleteListeners);
+        info.preservePathOnForward = preservePathOnForward;
         return info;
     }
 

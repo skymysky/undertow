@@ -21,9 +21,9 @@ package io.undertow.util;
 import io.undertow.UndertowMessages;
 
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
@@ -50,24 +50,27 @@ public class PathTemplateMatcher<T> {
     private volatile int[] lengths = {};
 
     public PathMatchResult<T> match(final String path) {
-        final Map<String, String> params = new HashMap<>();
-        int length = path.length();
+        String normalizedPath = "".equals(path) ? "/" : path;
+        if(!normalizedPath.startsWith("/"))
+            normalizedPath = "/"+ normalizedPath;
+        final Map<String, String> params = new LinkedHashMap<>();
+        int length = normalizedPath.length();
         final int[] lengths = this.lengths;
         for (int i = 0; i < lengths.length; ++i) {
             int pathLength = lengths[i];
             if (pathLength == length) {
-                Set<PathTemplateHolder> entry = pathTemplateMap.get(path);
+                Set<PathTemplateHolder> entry = pathTemplateMap.get(normalizedPath);
                 if (entry != null) {
-                    PathMatchResult<T> res = handleStemMatch(entry, path, params);
+                    PathMatchResult<T> res = handleStemMatch(entry, normalizedPath, params);
                     if (res != null) {
                         return res;
                     }
                 }
             } else if (pathLength < length) {
-                String part = path.substring(0, pathLength);
+                String part = normalizedPath.substring(0, pathLength);
                 Set<PathTemplateHolder> entry = pathTemplateMap.get(part);
                 if (entry != null) {
-                    PathMatchResult<T> res = handleStemMatch(entry, path, params);
+                    PathMatchResult<T> res = handleStemMatch(entry, normalizedPath, params);
                     if (res != null) {
                         return res;
                     }

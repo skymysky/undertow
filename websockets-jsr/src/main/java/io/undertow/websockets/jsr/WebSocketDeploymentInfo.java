@@ -27,18 +27,31 @@ import org.xnio.XnioWorker;
 import javax.websocket.server.ServerEndpointConfig;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
+import java.util.function.Supplier;
 
 /**
  * Web socket deployment information
  *
  * @author Stuart Douglas
  */
-public class WebSocketDeploymentInfo {
+public class WebSocketDeploymentInfo implements Cloneable {
 
     public static final String ATTRIBUTE_NAME = "io.undertow.websockets.jsr.WebSocketDeploymentInfo";
 
-    private XnioWorker worker;
+    private Supplier<XnioWorker> worker = new Supplier<XnioWorker>() {
+
+        volatile XnioWorker worker;
+
+        @Override
+        public XnioWorker get() {
+            if(worker != null) {
+                return worker;
+            }
+            return worker = UndertowContainerProvider.getDefaultContainer().getXnioWorker();
+        }
+    };
     private ByteBufferPool buffers;
     private boolean dispatchToWorkerThread = false;
     private final List<Class<?>> annotatedEndpoints = new ArrayList<>();
@@ -48,12 +61,22 @@ public class WebSocketDeploymentInfo {
     private String clientBindAddress = null;
     private WebSocketReconnectHandler reconnectHandler;
 
-    public XnioWorker getWorker() {
+    public Supplier<XnioWorker> getWorker() {
         return worker;
     }
 
-    public WebSocketDeploymentInfo setWorker(XnioWorker worker) {
+    public WebSocketDeploymentInfo setWorker(Supplier<XnioWorker> worker) {
         this.worker = worker;
+        return this;
+    }
+
+    public WebSocketDeploymentInfo setWorker(XnioWorker worker) {
+        this.worker = new Supplier<XnioWorker>() {
+            @Override
+            public XnioWorker get() {
+                return worker;
+            }
+        };
         return this;
     }
 
@@ -76,8 +99,18 @@ public class WebSocketDeploymentInfo {
         return this;
     }
 
+    public WebSocketDeploymentInfo addAnnotatedEndpoints(final Collection<Class<?>> annotatedEndpoints) {
+        this.annotatedEndpoints.addAll(annotatedEndpoints);
+        return this;
+    }
+
     public WebSocketDeploymentInfo addEndpoint(final ServerEndpointConfig endpoint) {
         this.programaticEndpoints.add(endpoint);
+        return this;
+    }
+
+    public WebSocketDeploymentInfo addProgramaticEndpoints(final Collection<ServerEndpointConfig> programaticEndpoints) {
+        this.programaticEndpoints.addAll(programaticEndpoints);
         return this;
     }
 
@@ -98,6 +131,15 @@ public class WebSocketDeploymentInfo {
     public WebSocketDeploymentInfo addListener(final ContainerReadyListener listener) {
         containerReadyListeners.add(listener);
         return this;
+    }
+
+    public WebSocketDeploymentInfo addListeners(final Collection<ContainerReadyListener> listeners) {
+        containerReadyListeners.addAll(listeners);
+        return this;
+    }
+
+    public List<ContainerReadyListener> getListeners() {
+        return containerReadyListeners;
     }
 
     public boolean isDispatchToWorkerThread() {
@@ -126,6 +168,11 @@ public class WebSocketDeploymentInfo {
         return this;
     }
 
+    public WebSocketDeploymentInfo addExtensions(final Collection<ExtensionHandshake> extensions) {
+        this.extensions.addAll(extensions);
+        return this;
+    }
+
     /**
      * @return list of extensions available for this deployment info
      */
@@ -137,8 +184,9 @@ public class WebSocketDeploymentInfo {
         return clientBindAddress;
     }
 
-    public void setClientBindAddress(String clientBindAddress) {
+    public WebSocketDeploymentInfo setClientBindAddress(String clientBindAddress) {
         this.clientBindAddress = clientBindAddress;
+        return this;
     }
 
     public WebSocketReconnectHandler getReconnectHandler() {
@@ -149,4 +197,20 @@ public class WebSocketDeploymentInfo {
         this.reconnectHandler = reconnectHandler;
         return this;
     }
+
+    @Override
+    public WebSocketDeploymentInfo clone() {
+        return new WebSocketDeploymentInfo()
+                .setWorker(this.worker)
+                .setBuffers(this.buffers)
+                .setDispatchToWorkerThread(this.dispatchToWorkerThread)
+                .addAnnotatedEndpoints(this.annotatedEndpoints)
+                .addProgramaticEndpoints(this.programaticEndpoints)
+                .addListeners(this.containerReadyListeners)
+                .addExtensions(this.extensions)
+                .setClientBindAddress(this.clientBindAddress)
+                .setReconnectHandler(this.reconnectHandler)
+        ;
+    }
+
 }

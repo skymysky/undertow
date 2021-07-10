@@ -18,7 +18,7 @@
 
 package io.undertow.servlet.handlers.security;
 
-import java.io.ByteArrayInputStream;
+import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
 import javax.servlet.ServletRequest;
 
@@ -26,6 +26,7 @@ import io.undertow.server.HttpHandler;
 import io.undertow.server.HttpServerExchange;
 import io.undertow.server.SSLSessionInfo;
 import io.undertow.servlet.handlers.ServletRequestContext;
+import io.undertow.util.HexConverter;
 
 /**
  * Handler that associates SSL metadata with request
@@ -55,30 +56,7 @@ public class SSLInformationAssociationHandler implements HttpHandler {
      * @return int indicating the effective key entropy bit-length.
      */
     public static int getKeyLength(String cipherSuite) {
-        // Roughly ordered from most common to least common.
-        if (cipherSuite == null) {
-            return 0;
-        } else if (cipherSuite.contains("WITH_AES_256_")) {
-            return 256;
-        } else if (cipherSuite.contains("WITH_RC4_128_")) {
-            return 128;
-        } else if (cipherSuite.contains("WITH_AES_128_")) {
-            return 128;
-        } else if (cipherSuite.contains("WITH_RC4_40_")) {
-            return 40;
-        } else if (cipherSuite.contains("WITH_3DES_EDE_CBC_")) {
-            return 168;
-        } else if (cipherSuite.contains("WITH_IDEA_CBC_")) {
-            return 128;
-        } else if (cipherSuite.contains("WITH_RC2_CBC_40_")) {
-            return 40;
-        } else if (cipherSuite.contains("WITH_DES40_CBC_")) {
-            return 40;
-        } else if (cipherSuite.contains("WITH_DES_CBC_")) {
-            return 56;
-        } else {
-            return 0;
-        }
+        return SSLSessionInfo.calculateKeySize(cipherSuite);
     }
 
 
@@ -86,8 +64,6 @@ public class SSLInformationAssociationHandler implements HttpHandler {
 
     /**
      * Return the chain of X509 certificates used to negotiate the SSL Session.
-     * <p>
-     * We convert JSSE's javax.security.cert.X509Certificate[]  to servlet's  java.security.cert.X509Certificate[]
      *
      * @param session the   javax.net.ssl.SSLSession to use as the source of the cert chain.
      * @return the chain of java.security.cert.X509Certificates used to
@@ -96,23 +72,31 @@ public class SSLInformationAssociationHandler implements HttpHandler {
      */
     private X509Certificate[] getCerts(SSLSessionInfo session) {
         try {
-            javax.security.cert.X509Certificate[] javaxCerts = session.getPeerCertificateChain();
-            if (javaxCerts == null || javaxCerts.length == 0) {
+            Certificate[] javaCerts = session.getPeerCertificates();
+            if (javaCerts == null) {
                 return null;
             }
-            X509Certificate[] javaCerts = new X509Certificate[javaxCerts.length];
-            java.security.cert.CertificateFactory cf = java.security.cert.CertificateFactory.getInstance("X.509");
-            for (int i = 0; i < javaxCerts.length; i++) {
-                byte[] bytes = javaxCerts[i].getEncoded();
-                ByteArrayInputStream stream = new ByteArrayInputStream(bytes);
-                javaCerts[i] = (X509Certificate) cf.generateCertificate(stream);
+            int x509Certs = 0;
+            for (Certificate javaCert : javaCerts) {
+                if (javaCert instanceof X509Certificate) {
+                    ++x509Certs;
+                }
             }
-
-            return javaCerts;
+            if (x509Certs == 0) {
+                return null;
+            }
+            int resultIndex = 0;
+            X509Certificate[] results = new X509Certificate[x509Certs];
+            for (Certificate certificate : javaCerts) {
+                if (certificate instanceof X509Certificate) {
+                    results[resultIndex++] = (X509Certificate) certificate;
+                }
+            }
+            return results;
         } catch (Exception e) {
             return null;
         }
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        }
+    }
 
     @Override
     public void handleRequest(HttpServerExchange exchange) throws Exception {
@@ -120,9 +104,10 @@ public class SSLInformationAssociationHandler implements HttpHandler {
         SSLSessionInfo ssl = exchange.getConnection().getSslSessionInfo();
         if (ssl != null) {
             String cipherSuite = ssl.getCipherSuite();
+            byte[] sessionId = ssl.getSessionId();
             request.setAttribute("javax.servlet.request.cipher_suite", cipherSuite);
-            request.setAttribute("javax.servlet.request.key_size", getKeyLength(cipherSuite));
-            request.setAttribute("javax.servlet.request.ssl_session_id", ssl.getSessionId());
+            request.setAttribute("javax.servlet.request.key_size", ssl.getKeySize());
+            request.setAttribute("javax.servlet.request.ssl_session_id", sessionId != null? HexConverter.convertToHexString(sessionId) : null);
             X509Certificate[] certs = getCerts(ssl);
             if (certs != null) {
                 request.setAttribute("javax.servlet.request.X509Certificate", certs);

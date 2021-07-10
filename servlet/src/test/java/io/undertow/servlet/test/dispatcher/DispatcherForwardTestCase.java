@@ -41,7 +41,10 @@ import io.undertow.util.StatusCodes;
 import org.apache.http.HttpResponse;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.methods.HttpPost;
+import org.hamcrest.CoreMatchers;
+import org.hamcrest.MatcherAssert;
 import org.junit.Assert;
+import org.junit.Assume;
 import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -74,7 +77,9 @@ public class DispatcherForwardTestCase {
 
     @BeforeClass
     public static void setup() throws ServletException {
-
+        //we don't run this test on h2 upgrade, as if it is run with the original request
+        //the protocols will not match
+        Assume.assumeFalse(DefaultServer.isH2upgrade());
         final PathHandler root = new PathHandler();
         final ServletContainer container = ServletContainer.Factory.newInstance();
 
@@ -157,6 +162,21 @@ public class DispatcherForwardTestCase {
     }
 
     @Test
+    public void testNameBasedForwardOutServletContext() throws IOException {
+        TestHttpClient client = new TestHttpClient();
+        try {
+            HttpGet get = new HttpGet(DefaultServer.getDefaultServerURL() + "/servletContext/dispatch");
+            get.setHeader("forward", "../forward");
+            HttpResponse result = client.execute(get);
+            Assert.assertEquals(StatusCodes.INTERNAL_SERVER_ERROR, result.getStatusLine().getStatusCode());
+            final String response = HttpClientUtils.readResponse(result);
+            MatcherAssert.assertThat(response, CoreMatchers.containsString("dispatcher was null!"));
+        } finally {
+            client.getConnectionManager().shutdown();
+        }
+    }
+
+    @Test
     public void testPathBasedStaticInclude() throws IOException {
         TestHttpClient client = new TestHttpClient();
         try {
@@ -188,22 +208,31 @@ public class DispatcherForwardTestCase {
 
 
     @Test
-    public void testIncludeAggregatesQueryString() throws IOException {
+    public void testIncludeAggregatesQueryString() throws IOException, InterruptedException {
         TestHttpClient client = new TestHttpClient();
+        String protocol = DefaultServer.isH2() ? Protocols.HTTP_2_0_STRING : Protocols.HTTP_1_1_STRING;
         try {
+            resetLatch();
             HttpGet get = new HttpGet(DefaultServer.getDefaultServerURL() + "/servletContext/dispatch?a=b");
             get.setHeader("forward", "/path");
             HttpResponse result = client.execute(get);
             Assert.assertEquals(StatusCodes.OK, result.getStatusLine().getStatusCode());
             String response = HttpClientUtils.readResponse(result);
             Assert.assertEquals("pathInfo:null queryString:a=b servletPath:/path requestUri:/servletContext/path", response);
+            latch.await(30, TimeUnit.SECONDS);
+            //UNDERTOW-327 and UNDERTOW-1599 - make sure that the access log includes the original path and query string
+            Assert.assertEquals("GET /servletContext/dispatch?a=b " + protocol + " /servletContext/dispatch /dispatch", message);
 
+            resetLatch();
             get = new HttpGet(DefaultServer.getDefaultServerURL() + "/servletContext/dispatch?a=b");
             get.setHeader("forward", "/path?foo=bar");
             result = client.execute(get);
             Assert.assertEquals(StatusCodes.OK, result.getStatusLine().getStatusCode());
             response = HttpClientUtils.readResponse(result);
             Assert.assertEquals("pathInfo:null queryString:foo=bar servletPath:/path requestUri:/servletContext/path", response);
+            latch.await(30, TimeUnit.SECONDS);
+            //UNDERTOW-327 and UNDERTOW-1599 - make sure that the access log includes the original path and query string
+            Assert.assertEquals("GET /servletContext/dispatch?a=b " + protocol + " /servletContext/dispatch /dispatch", message);
         } finally {
             client.getConnectionManager().shutdown();
         }

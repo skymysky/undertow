@@ -41,14 +41,12 @@ import io.undertow.servlet.handlers.ServletRequestContext;
 import io.undertow.servlet.util.EmptyEnumeration;
 import io.undertow.servlet.util.IteratorEnumeration;
 import io.undertow.util.AttachmentKey;
-import io.undertow.util.CanonicalPathUtils;
 import io.undertow.util.DateUtils;
 import io.undertow.util.HeaderMap;
 import io.undertow.util.HeaderValues;
 import io.undertow.util.Headers;
 import io.undertow.util.HttpString;
 import io.undertow.util.LocaleUtils;
-import io.undertow.util.Methods;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -57,6 +55,7 @@ import java.io.UnsupportedEncodingException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.nio.charset.UnsupportedCharsetException;
 import java.security.AccessController;
 import java.security.Principal;
@@ -96,11 +95,15 @@ import javax.servlet.http.PushBuilder;
  * The http servlet request implementation. This class is not thread safe
  *
  * @author Stuart Douglas
+ * @author <a href="mailto:ropalka@redhat.com">Richard Opalka</a>
  */
 public final class HttpServletRequestImpl implements HttpServletRequest {
 
     @Deprecated
     public static final AttachmentKey<Boolean> SECURE_REQUEST = HttpServerExchange.SECURE_REQUEST;
+
+    static final AttachmentKey<Boolean> REQUESTED_SESSION_ID_SET = AttachmentKey.create(Boolean.class);
+    static final AttachmentKey<String> REQUESTED_SESSION_ID = AttachmentKey.create(String.class);
 
     private final HttpServerExchange exchange;
     private final ServletContextImpl originalServletContext;
@@ -114,7 +117,6 @@ public final class HttpServletRequestImpl implements HttpServletRequest {
     private Cookie[] cookies;
     private List<Part> parts = null;
     private volatile boolean asyncStarted = false;
-    private volatile boolean asyncCancelled = false;
     private volatile AsyncContextImpl asyncContext = null;
     private Map<String, Deque<String>> queryParameters;
     private FormData parsedFormData;
@@ -143,15 +145,17 @@ public final class HttpServletRequestImpl implements HttpServletRequest {
     @Override
     public Cookie[] getCookies() {
         if (cookies == null) {
-            Map<String, io.undertow.server.handlers.Cookie> cookies = exchange.getRequestCookies();
-            if (cookies.isEmpty()) {
+            Iterable<io.undertow.server.handlers.Cookie> cookies = exchange.requestCookies();
+            int count = 0;
+            for (io.undertow.server.handlers.Cookie cookie : cookies) {
+                count++;
+            }
+            if (count == 0) {
                 return null;
             }
-            int count = cookies.size();
             Cookie[] value = new Cookie[count];
             int i = 0;
-            for (Map.Entry<String, io.undertow.server.handlers.Cookie> entry : cookies.entrySet()) {
-                io.undertow.server.handlers.Cookie cookie = entry.getValue();
+            for (io.undertow.server.handlers.Cookie cookie : cookies) {
                 try {
                     Cookie c = new Cookie(cookie.getName(), cookie.getValue());
                     if (cookie.getDomain() != null) {
@@ -228,32 +232,37 @@ public final class HttpServletRequestImpl implements HttpServletRequest {
     public HttpServletMapping getHttpServletMapping() {
         ServletRequestContext src = exchange.getAttachment(ServletRequestContext.ATTACHMENT_KEY);
         ServletPathMatch match = src.getOriginalServletPathMatch();
-        if(getDispatcherType() == DispatcherType.FORWARD) {
+        final DispatcherType dispatcherType = getDispatcherType();
+        //UNDERTOW-1899 - ERROR is essentially forward operation
+        if(dispatcherType == DispatcherType.FORWARD || dispatcherType == DispatcherType.ERROR) {
             match = src.getServletPathMatch();
         }
         String matchValue;
         switch (match.getMappingMatch()) {
             case EXACT:
-            case DEFAULT: //TODO: TCK expects different behaviour to the spec, but I think the TCK makes more sense
                 matchValue = match.getMatched();
                 if(matchValue.startsWith("/")) {
                     matchValue = matchValue.substring(1);
                 }
                 break;
+            case DEFAULT:
             case CONTEXT_ROOT:
                 matchValue = "";
                 break;
             case PATH:
                 matchValue = match.getRemaining();
-                if(matchValue.startsWith("/")) {
+                if (matchValue == null) {
+                    matchValue = "";
+                } else if (matchValue.startsWith("/")) {
                     matchValue = matchValue.substring(1);
                 }
                 break;
             case EXTENSION:
-                matchValue = match.getMatched().substring(0, match.getMatched().length() - match.getMatchString().length() + 1);
-                if(matchValue.startsWith("/")) {
-                    matchValue = matchValue.substring(1);
-                }
+                String matched = match.getMatched();
+                String matchString = match.getMatchString();
+                int startIndex = matched.startsWith("/") ? 1 : 0;
+                int endIndex = matched.length() - matchString.length() + 1;
+                matchValue = matched.substring(startIndex, endIndex);
                 break;
             default:
                 matchValue = match.getRemaining();
@@ -316,7 +325,7 @@ public final class HttpServletRequestImpl implements HttpServletRequest {
             return false;
         }
         SecurityContext sc = exchange.getSecurityContext();
-        Account account = sc.getAuthenticatedAccount();
+        Account account = sc != null ? sc.getAuthenticatedAccount() : null;
         if (account == null) {
             return false;
         }
@@ -348,6 +357,10 @@ public final class HttpServletRequestImpl implements HttpServletRequest {
 
     @Override
     public String getRequestedSessionId() {
+        Boolean isRequestedSessionIdSaved = exchange.getAttachment(REQUESTED_SESSION_ID_SET);
+        if (isRequestedSessionIdSaved != null && isRequestedSessionIdSaved) {
+            return exchange.getAttachment(REQUESTED_SESSION_ID);
+        }
         SessionConfig config = originalServletContext.getSessionConfig();
         if(config instanceof ServletContextImpl.ServletContextSessionConfig) {
             return ((ServletContextImpl.ServletContextSessionConfig)config).getDelegate().findSessionId(exchange);
@@ -452,6 +465,10 @@ public final class HttpServletRequestImpl implements HttpServletRequest {
         }
 
         SecurityContext sc = exchange.getSecurityContext();
+        if (sc == null) {
+            throw UndertowServletMessages.MESSAGES.noSecurityContextAvailable();
+        }
+
         sc.setAuthenticationRequired();
         // TODO: this will set the status code and headers without going through any potential
         // wrappers, is this a problem?
@@ -476,7 +493,9 @@ public final class HttpServletRequestImpl implements HttpServletRequest {
             throw UndertowServletMessages.MESSAGES.loginFailed();
         }
         SecurityContext sc = exchange.getSecurityContext();
-        if (sc.isAuthenticated()) {
+        if (sc == null) {
+            throw UndertowServletMessages.MESSAGES.noSecurityContextAvailable();
+        } else if (sc.isAuthenticated()) {
             throw UndertowServletMessages.MESSAGES.userAlreadyLoggedIn();
         }
         boolean login = false;
@@ -496,6 +515,9 @@ public final class HttpServletRequestImpl implements HttpServletRequest {
     @Override
     public void logout() throws ServletException {
         SecurityContext sc = exchange.getSecurityContext();
+        if (sc == null) {
+            throw UndertowServletMessages.MESSAGES.noSecurityContextAvailable();
+        }
         sc.logout();
         if(servletContext.getDeployment().getDeploymentInfo().isInvalidateSessionOnLogout()) {
             HttpSession session = getSession(false);
@@ -602,12 +624,14 @@ public final class HttpServletRequestImpl implements HttpServletRequest {
         if (characterEncodingFromHeader != null) {
             return characterEncodingFromHeader;
         }
-
-        if (servletContext.getDeployment().getDeploymentInfo().getDefaultRequestEncoding() != null ||
-                servletContext.getDeployment().getDeploymentInfo().getDefaultEncoding() != null) {
-            return servletContext.getDeployment().getDefaultRequestCharset().name();
+        // first check, web-app context level default request encoding
+        if (servletContext.getDeployment().getDeploymentInfo().getDefaultRequestEncoding() != null) {
+            return servletContext.getDeployment().getDeploymentInfo().getDefaultRequestEncoding();
         }
-
+        // now check the container level default encoding
+        if (servletContext.getDeployment().getDeploymentInfo().getDefaultEncoding() != null) {
+            return servletContext.getDeployment().getDeploymentInfo().getDefaultEncoding();
+        }
         return null;
     }
 
@@ -674,10 +698,10 @@ public final class HttpServletRequestImpl implements HttpServletRequest {
     }
 
     public void closeAndDrainRequest() throws IOException {
-        if(reader != null) {
+        if (reader != null) {
             reader.close();
         }
-        if(servletInputStream == null) {
+        if (servletInputStream == null) {
             servletInputStream = new ServletInputStreamImpl(this);
         }
         servletInputStream.close();
@@ -688,11 +712,15 @@ public final class HttpServletRequestImpl implements HttpServletRequest {
      *
      */
     public void freeResources() throws IOException {
-        if(reader != null) {
-            reader.close();
-        }
-        if(servletInputStream != null) {
-            servletInputStream.close();
+        try {
+            if(reader != null) {
+                reader.close();
+            }
+            if(servletInputStream != null) {
+                servletInputStream.close();
+            }
+        } finally {
+            clearAttributes();
         }
     }
 
@@ -706,7 +734,7 @@ public final class HttpServletRequestImpl implements HttpServletRequest {
             final FormData parsedFormData = parseFormData();
             if (parsedFormData != null) {
                 FormData.FormValue res = parsedFormData.getFirst(name);
-                if (res == null || res.isFile()) {
+                if (res == null || res.isFileItem()) {
                     return null;
                 } else {
                     return res.getValue();
@@ -723,17 +751,15 @@ public final class HttpServletRequestImpl implements HttpServletRequest {
             queryParameters = exchange.getQueryParameters();
         }
         final Set<String> parameterNames = new HashSet<>(queryParameters.keySet());
-        if (exchange.getRequestMethod().equals(Methods.POST)) {
-            final FormData parsedFormData = parseFormData();
-            if (parsedFormData != null) {
-                Iterator<String> it = parsedFormData.iterator();
-                while (it.hasNext()) {
-                    String name = it.next();
-                    for(FormData.FormValue param : parsedFormData.get(name)) {
-                        if(!param.isFile()) {
-                            parameterNames.add(name);
-                            break;
-                        }
+        final FormData parsedFormData = parseFormData();
+        if (parsedFormData != null) {
+            Iterator<String> it = parsedFormData.iterator();
+            while (it.hasNext()) {
+                String name = it.next();
+                for(FormData.FormValue param : parsedFormData.get(name)) {
+                    if(!param.isFileItem()) {
+                        parameterNames.add(name);
+                        break;
                     }
                 }
             }
@@ -753,15 +779,13 @@ public final class HttpServletRequestImpl implements HttpServletRequest {
                 ret.add(param);
             }
         }
-        if (exchange.getRequestMethod().equals(Methods.POST)) {
-            final FormData parsedFormData = parseFormData();
-            if (parsedFormData != null) {
-                Deque<FormData.FormValue> res = parsedFormData.get(name);
-                if (res != null) {
-                    for (FormData.FormValue value : res) {
-                        if(!value.isFile()) {
-                            ret.add(value.getValue());
-                        }
+        final FormData parsedFormData = parseFormData();
+        if (parsedFormData != null) {
+            Deque<FormData.FormValue> res = parsedFormData.get(name);
+            if (res != null) {
+                for (FormData.FormValue value : res) {
+                    if(!value.isFileItem()) {
+                        ret.add(value.getValue());
                     }
                 }
             }
@@ -781,28 +805,28 @@ public final class HttpServletRequestImpl implements HttpServletRequest {
         for (Map.Entry<String, Deque<String>> entry : queryParameters.entrySet()) {
             arrayMap.put(entry.getKey(), new ArrayList<>(entry.getValue()));
         }
-        if (exchange.getRequestMethod().equals(Methods.POST)) {
 
-            final FormData parsedFormData = parseFormData();
-            if (parsedFormData != null) {
-                Iterator<String> it = parsedFormData.iterator();
-                while (it.hasNext()) {
-                    final String name = it.next();
-                    Deque<FormData.FormValue> val = parsedFormData.get(name);
-                    if (arrayMap.containsKey(name)) {
-                        ArrayList<String> existing = arrayMap.get(name);
-                        for (final FormData.FormValue v : val) {
-                            if(!v.isFile()) {
-                                existing.add(v.getValue());
-                            }
+        final FormData parsedFormData = parseFormData();
+        if (parsedFormData != null) {
+            Iterator<String> it = parsedFormData.iterator();
+            while (it.hasNext()) {
+                final String name = it.next();
+                Deque<FormData.FormValue> val = parsedFormData.get(name);
+                if (arrayMap.containsKey(name)) {
+                    ArrayList<String> existing = arrayMap.get(name);
+                    for (final FormData.FormValue v : val) {
+                        if(!v.isFileItem()) {
+                            existing.add(v.getValue());
                         }
-                    } else {
-                        final ArrayList<String> values = new ArrayList<>();
-                        for (final FormData.FormValue v : val) {
-                            if(!v.isFile()) {
-                                values.add(v.getValue());
-                            }
+                    }
+                } else {
+                    final ArrayList<String> values = new ArrayList<>();
+                    for (final FormData.FormValue v : val) {
+                        if(!v.isFileItem()) {
+                            values.add(v.getValue());
                         }
+                    }
+                    if (!values.isEmpty()) {
                         arrayMap.put(name, values);
                     }
                 }
@@ -868,21 +892,22 @@ public final class HttpServletRequestImpl implements HttpServletRequest {
             if (servletInputStream != null) {
                 throw UndertowServletMessages.MESSAGES.getInputStreamAlreadyCalled();
             }
-            Charset charSet = servletContext.getDeployment().getDefaultRequestCharset();
-            if (characterEncoding != null) {
-                charSet = characterEncoding;
+            Charset charSet = null;
+            if (this.characterEncoding != null) {
+                charSet = this.characterEncoding;
             } else {
-                String c = getCharacterEncodingFromHeader();
+                final String c = getCharacterEncoding();
                 if (c != null) {
                     try {
                         charSet = Charset.forName(c);
                     } catch (UnsupportedCharsetException e) {
-                        throw new UnsupportedEncodingException();
+                        throw new UnsupportedEncodingException(e.getMessage());
                     }
                 }
             }
 
-            reader = new BufferedReader(new InputStreamReader(exchange.getInputStream(), charSet));
+            reader = new BufferedReader(charSet == null ? new InputStreamReader(exchange.getInputStream(), StandardCharsets.ISO_8859_1)
+                    : new InputStreamReader(exchange.getInputStream(), charSet));
         }
         readStarted = true;
         return reader;
@@ -961,6 +986,9 @@ public final class HttpServletRequestImpl implements HttpServletRequest {
 
     @Override
     public RequestDispatcher getRequestDispatcher(final String path) {
+        if (path == null) {
+            return null;
+        }
         String realPath;
         if (path.startsWith("/")) {
             realPath = path;
@@ -970,9 +998,9 @@ public final class HttpServletRequestImpl implements HttpServletRequest {
             if (lastSlash != -1) {
                 current = current.substring(0, lastSlash + 1);
             }
-            realPath = CanonicalPathUtils.canonicalize(current + path);
+            realPath = current + path;
         }
-        return new RequestDispatcherImpl(realPath, servletContext);
+        return servletContext.getRequestDispatcher(realPath);
     }
 
     @Override
@@ -985,18 +1013,30 @@ public final class HttpServletRequestImpl implements HttpServletRequest {
         return exchange.getSourceAddress().getPort();
     }
 
+    /**
+     * String java.net.InetAddress.getHostName()
+     * Gets the host name for this IP address.
+     * If this InetAddress was created with a host name, this host name will be remembered and returned; otherwise, a reverse name lookup will be performed and the result will be returned based on the system configured name lookup service. If a lookup of the name service is required, call getCanonicalHostName.
+     * If there is a security manager, its checkConnect method is first called with the hostname and -1 as its arguments to see if the operation is allowed. If the operation is not allowed, it will return the textual representation of the IP address.
+     * @see InetAddres#getHostName
+     */
     @Override
     public String getLocalName() {
-        return exchange.getDestinationAddress().getHostString();
+        return exchange.getDestinationAddress().getHostName();
     }
 
     @Override
     public String getLocalAddr() {
-        InetSocketAddress address = exchange.getDestinationAddress();
-         if (address != null) {
-            return address.getAddress().getHostAddress();
+        InetSocketAddress destinationAddress = exchange.getDestinationAddress();
+        if (destinationAddress == null) {
+            return "";
         }
-        return null;
+        InetAddress address = destinationAddress.getAddress();
+        if (address == null) {
+            //this is unresolved, so we just return the host name
+            return destinationAddress.getHostString();
+        }
+        return address.getHostAddress();
     }
 
     @Override
@@ -1049,16 +1089,12 @@ public final class HttpServletRequestImpl implements HttpServletRequest {
 
     @Override
     public boolean isAsyncStarted() {
-        return asyncStarted || asyncCancelled;
+        return asyncStarted;
     }
 
     @Override
     public boolean isAsyncSupported() {
         return exchange.getAttachment(ServletRequestContext.ATTACHMENT_KEY).isAsyncSupported();
-    }
-
-    void setAsyncCancelled(boolean asyncCancelled) {
-        this.asyncCancelled = asyncCancelled;
     }
 
     @Override

@@ -38,8 +38,6 @@ import org.xnio.channels.AcceptingChannel;
 import org.xnio.ssl.SslConnection;
 
 import java.io.IOException;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -58,18 +56,6 @@ import javax.net.ssl.SSLParameters;
  * @author Stuart Douglas
  */
 class UndertowAcceptingSslChannel implements AcceptingChannel<SslConnection> {
-
-    static final Method USE_CIPHER_SUITES_METHOD;
-
-    static {
-        Method method = null;
-        try {
-            method = SSLParameters.class.getDeclaredMethod("setUseCipherSuitesOrder", boolean.class);
-            method.setAccessible(true);
-        } catch (NoSuchMethodException e) {
-        }
-        USE_CIPHER_SUITES_METHOD = method;
-    }
 
     private final UndertowXnioSsl ssl;
     private final AcceptingChannel<? extends StreamConnection> tcpServer;
@@ -158,14 +144,10 @@ class UndertowAcceptingSslChannel implements AcceptingChannel<SslConnection> {
             final InetSocketAddress peerAddress = tcpConnection.getPeerAddress(InetSocketAddress.class);
             final SSLEngine engine = ssl.getSslContext().createSSLEngine(getHostNameNoResolve(peerAddress), peerAddress.getPort());
 
-            if(USE_CIPHER_SUITES_METHOD != null && useCipherSuitesOrder) {
+            if(useCipherSuitesOrder) {
                 SSLParameters sslParameters = engine.getSSLParameters();
-                try {
-                    USE_CIPHER_SUITES_METHOD.invoke(sslParameters, true);
-                    engine.setSSLParameters(sslParameters);
-                } catch (IllegalAccessException | InvocationTargetException e) {
-                    UndertowLogger.ROOT_LOGGER.failedToUseServerOrder(e);
-                }
+                sslParameters.setUseCipherSuitesOrder(true);
+                engine.setSSLParameters(sslParameters);
             }
             final boolean clientMode = useClientMode != 0;
             engine.setUseClientMode(clientMode);
@@ -190,24 +172,32 @@ class UndertowAcceptingSslChannel implements AcceptingChannel<SslConnection> {
             final String[] cipherSuites = UndertowAcceptingSslChannel.this.cipherSuites;
             if (cipherSuites != null) {
                 final Set<String> supported = new HashSet<>(Arrays.asList(engine.getSupportedCipherSuites()));
-                final List<String> finalList = new ArrayList<>();
-                for (String name : cipherSuites) {
-                    if (supported.contains(name)) {
-                        finalList.add(name);
+                if(supported.isEmpty()) {
+                    engine.setEnabledCipherSuites(cipherSuites);
+                } else {
+                    final List<String> finalList = new ArrayList<>();
+                    for (String name : cipherSuites) {
+                        if (supported.contains(name)) {
+                            finalList.add(name);
+                        }
                     }
+                    engine.setEnabledCipherSuites(finalList.toArray(new String[finalList.size()]));
                 }
-                engine.setEnabledCipherSuites(finalList.toArray(new String[finalList.size()]));
             }
             final String[] protocols = UndertowAcceptingSslChannel.this.protocols;
             if (protocols != null) {
                 final Set<String> supported = new HashSet<>(Arrays.asList(engine.getSupportedProtocols()));
-                final List<String> finalList = new ArrayList<>();
-                for (String name : protocols) {
-                    if (supported.contains(name)) {
-                        finalList.add(name);
+                if(supported.isEmpty()) {
+                    engine.setEnabledProtocols(protocols);
+                } else {
+                    final List<String> finalList = new ArrayList<>();
+                    for (String name : protocols) {
+                        if (supported.contains(name)) {
+                            finalList.add(name);
+                        }
                     }
+                    engine.setEnabledProtocols(finalList.toArray(new String[finalList.size()]));
                 }
-                engine.setEnabledProtocols(finalList.toArray(new String[finalList.size()]));
             }
             return accept(tcpConnection, engine);
         } catch (IOException | RuntimeException e) {
@@ -218,7 +208,7 @@ class UndertowAcceptingSslChannel implements AcceptingChannel<SslConnection> {
     }
 
     protected UndertowSslConnection accept(StreamConnection tcpServer, SSLEngine sslEngine) throws IOException {
-        return new UndertowSslConnection(tcpServer, sslEngine, applicationBufferPool);
+        return new UndertowSslConnection(tcpServer, sslEngine, applicationBufferPool, ssl.getDelegatedTaskExecutor());
     }
 
     public ChannelListener.Setter<? extends AcceptingChannel<SslConnection>> getCloseSetter() {

@@ -26,6 +26,7 @@ import io.undertow.client.UndertowClient;
 import io.undertow.server.HttpHandler;
 import io.undertow.server.handlers.ResponseCodeHandler;
 import io.undertow.server.handlers.proxy.ProxyHandler;
+import io.undertow.server.handlers.proxy.RouteParsingStrategy;
 import org.xnio.OptionMap;
 import org.xnio.XnioWorker;
 import org.xnio.ssl.XnioSsl;
@@ -55,6 +56,10 @@ public class ModCluster {
     private final ModClusterContainer container;
     private final int maxRetries;
     private final boolean deterministicFailover;
+    private final RouteParsingStrategy routeParsingStrategy;
+    private final String rankedAffinityDelimiter;
+
+    private final boolean reuseXForwarded;
 
     private final String serverID = UUID.randomUUID().toString(); // TODO
 
@@ -67,11 +72,14 @@ public class ModCluster {
         this.healthCheckInterval = builder.healthCheckInterval;
         this.removeBrokenNodes = builder.removeBrokenNodes;
         this.deterministicFailover = builder.deterministicFailover;
+        this.routeParsingStrategy = builder.routeParsingStrategy;
+        this.rankedAffinityDelimiter = builder.rankedAffinityDelimiter;
         this.healthChecker = builder.healthChecker;
         this.maxRequestTime = builder.maxRequestTime;
         this.ttl = builder.ttl;
         this.useAlias = builder.useAlias;
         this.maxRetries = builder.maxRetries;
+        this.reuseXForwarded = builder.reuseXForwarded;
         this.container = new ModClusterContainer(this, builder.xnioSsl, builder.client, builder.clientOptions);
     }
 
@@ -127,6 +135,14 @@ public class ModCluster {
         return deterministicFailover;
     }
 
+    public RouteParsingStrategy routeParsingStrategy() {
+        return this.routeParsingStrategy;
+    }
+
+    public String rankedAffinityDelimiter() {
+        return this.rankedAffinityDelimiter;
+    }
+
     /**
      * Get the handler proxying the requests.
      *
@@ -142,7 +158,12 @@ public class ModCluster {
      * @return the proxy handler
      */
     public HttpHandler createProxyHandler() {
-        return ProxyHandler.builder().setProxyClient(container.getProxyClient()).setMaxRequestTime(maxRequestTime).setMaxConnectionRetries(maxRetries).build();
+        return ProxyHandler.builder()
+                .setProxyClient(container.getProxyClient())
+                .setMaxRequestTime(maxRequestTime)
+                .setMaxConnectionRetries(maxRetries)
+                .setReuseXForwarded(reuseXForwarded)
+                .build();
     }
 
     /**
@@ -151,7 +172,13 @@ public class ModCluster {
      * @return the proxy handler
      */
     public HttpHandler createProxyHandler(HttpHandler next) {
-        return ProxyHandler.builder().setProxyClient(container.getProxyClient()).setNext(next).setMaxRequestTime(maxRequestTime).setMaxConnectionRetries(maxRetries).build();
+        return ProxyHandler.builder()
+                .setProxyClient(container.getProxyClient())
+                .setNext(next)
+                .setMaxRequestTime(maxRequestTime)
+                .setMaxConnectionRetries(maxRetries)
+                .setReuseXForwarded(reuseXForwarded)
+                .build();
     }
     /**
      * Start
@@ -215,6 +242,10 @@ public class ModCluster {
         private OptionMap clientOptions = OptionMap.EMPTY;
         private int maxRetries;
         private boolean deterministicFailover = false;
+        private RouteParsingStrategy routeParsingStrategy = RouteParsingStrategy.SINGLE;
+        private String rankedAffinityDelimiter = ".";
+
+        private boolean reuseXForwarded;
 
         private Builder(XnioWorker xnioWorker, UndertowClient client, XnioSsl xnioSsl) {
             this.xnioSsl = xnioSsl;
@@ -281,6 +312,30 @@ public class ModCluster {
             return this;
         }
 
+        /**
+         * Configures route parsing strategy to support none, single or ranked affinity.
+         *
+         * @param routeParsingStrategy strategy to use for parsing routes
+         * @return this builder
+         */
+        public Builder setRouteParsingStrategy(RouteParsingStrategy routeParsingStrategy) {
+            this.routeParsingStrategy = routeParsingStrategy;
+            return this;
+        }
+
+        /**
+         * Configures ranked affinity delimiter used for splitting multiple encoded routes when
+         * {@link RouteParsingStrategy#RANKED} is specified. Web requests will have an affinity for the first available node in
+         * the list.
+         *
+         * @param rankedAffinityDelimiter delimiter splitting multiple routes; typically a "."
+         * @return this builder
+         */
+        public Builder setRankedAffinityDelimiter(String rankedAffinityDelimiter) {
+            this.rankedAffinityDelimiter = rankedAffinityDelimiter;
+            return this;
+        }
+
         public Builder setTtl(long ttl) {
             this.ttl = ttl;
             return this;
@@ -288,6 +343,11 @@ public class ModCluster {
 
         public Builder setClientOptions(OptionMap clientOptions) {
             this.clientOptions = clientOptions;
+            return this;
+        }
+
+        public Builder setReuseXForwarded(boolean reuseXForwarded) {
+            this.reuseXForwarded = reuseXForwarded;
             return this;
         }
     }

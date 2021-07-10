@@ -37,6 +37,7 @@ import io.undertow.server.handlers.resource.ResourceChangeListener;
 import io.undertow.server.handlers.resource.ResourceManager;
 import io.undertow.servlet.UndertowServletLogger;
 import io.undertow.servlet.UndertowServletMessages;
+import io.undertow.servlet.api.DeploymentInfo;
 import io.undertow.servlet.api.DeploymentManager;
 import io.undertow.servlet.api.InstanceFactory;
 import io.undertow.servlet.api.InstanceHandle;
@@ -59,7 +60,7 @@ public class ManagedServlet implements Lifecycle {
     private final InstanceStrategy instanceStrategy;
     private volatile boolean permanentlyUnavailable = false;
 
-    private long maxRequestSize;
+    private long maxMultipartRequestSize;
     private FormParserFactory formParserFactory;
     private MultipartConfigElement multipartConfig;
 
@@ -91,9 +92,9 @@ public class ManagedServlet implements Lifecycle {
             //todo: fileSizeThreshold
             MultipartConfigElement config = multipartConfig;
             if (config.getMaxRequestSize() != -1) {
-                maxRequestSize = config.getMaxRequestSize();
+                maxMultipartRequestSize = config.getMaxRequestSize();
             } else {
-                maxRequestSize = -1;
+                maxMultipartRequestSize = -1;
             }
             final Path tempDir;
             if(config.getLocation() == null || config.getLocation().isEmpty()) {
@@ -104,13 +105,17 @@ public class ManagedServlet implements Lifecycle {
                 if(locFile.isAbsolute()) {
                     tempDir = locFile;
                 } else {
-                    tempDir = servletContext.getDeployment().getDeploymentInfo().getTempPath().resolve(location);
+                    final DeploymentInfo deploymentInfo = servletContext.getDeployment().getDeploymentInfo();
+                    tempDir = deploymentInfo.requireTempPath().resolve(location);
                 }
             }
 
             MultiPartParserDefinition multiPartParserDefinition = new MultiPartParserDefinition(tempDir);
             if(config.getMaxFileSize() > 0) {
                 multiPartParserDefinition.setMaxIndividualFileSize(config.getMaxFileSize());
+            }
+            if (config.getFileSizeThreshold() > 0) {
+                multiPartParserDefinition.setFileSizeThreshold(config.getFileSizeThreshold());
             }
             multiPartParserDefinition.setDefaultEncoding(servletContext.getDeployment().getDefaultRequestCharset().name());
 
@@ -122,7 +127,7 @@ public class ManagedServlet implements Lifecycle {
         } else {
             //no multipart config we don't allow multipart requests
             formParserFactory = FormParserFactory.builder(false).addParser(formDataParser).build();
-            maxRequestSize = -1;
+            maxMultipartRequestSize = -1;
         }
     }
 
@@ -230,8 +235,12 @@ public class ManagedServlet implements Lifecycle {
         return servletInfo;
     }
 
+    /**
+     * This value determines max multipart message size
+     * @return
+     */
     public long getMaxRequestSize() {
-        return maxRequestSize;
+        return maxMultipartRequestSize;
     }
 
     public FormParserFactory getFormParserFactory() {
@@ -381,7 +390,11 @@ public class ManagedServlet implements Lifecycle {
 
                 @Override
                 public void release() {
-                    instance.destroy();
+                    try {
+                        instance.destroy();
+                    } catch (Throwable t) {
+                        UndertowServletLogger.REQUEST_LOGGER.failedToDestroy(instance, t);
+                    }
                     instanceHandle.release();
                 }
             };

@@ -20,11 +20,14 @@ package io.undertow;
 
 import java.io.IOException;
 import java.nio.channels.ClosedChannelException;
+
+import javax.net.ssl.SSLException;
 import javax.net.ssl.SSLHandshakeException;
 import javax.net.ssl.SSLPeerUnverifiedException;
 
 import io.undertow.server.RequestTooBigException;
 import io.undertow.server.handlers.form.MultiPartParserDefinition;
+import io.undertow.util.UrlDecodeException;
 import org.jboss.logging.Messages;
 import org.jboss.logging.annotations.Cause;
 import org.jboss.logging.annotations.Message;
@@ -36,6 +39,8 @@ import io.undertow.server.handlers.builder.HandlerBuilder;
 import io.undertow.util.HttpString;
 import io.undertow.util.ParameterLimitException;
 import io.undertow.util.BadRequestException;
+import org.xnio.channels.ReadTimeoutException;
+import org.xnio.channels.WriteTimeoutException;
 
 /**
  * @author Stuart Douglas
@@ -87,7 +92,7 @@ public interface UndertowMessages {
 //    @Message(id = 16, value = "Could not add cookie as cookie handler was not present in the handler chain")
 //    IllegalStateException cookieHandlerNotPresent();
 
-    @Message(id = 17, value = "Form value is a file, use getFile() instead")
+    @Message(id = 17, value = "Form value is a file, use getFileItem() instead")
     IllegalStateException formValueIsAFile();
 
     @Message(id = 18, value = "Form value is a String, use getValue() instead")
@@ -247,7 +252,7 @@ public interface UndertowMessages {
     IllegalStateException matcherAlreadyContainsTemplate(String templateString, String templateString1);
 
     @Message(id = 72, value = "Failed to decode url %s to charset %s")
-    IllegalArgumentException failedToDecodeURL(String s, String enc, @Cause Exception e);
+    UrlDecodeException failedToDecodeURL(String s, String enc, @Cause Exception e);
 
 
     @Message(id = 73, value = "Resource change listeners are not supported")
@@ -515,8 +520,8 @@ public interface UndertowMessages {
     @Message(id = 161, value = "HTTP/2 header block is too large")
     String headerBlockTooLarge();
 
-    @Message(id = 162, value = "Same-site attribute %s is invalid. It must be Strict or Lax")
-    IllegalArgumentException invalidSameSiteMode(String mode);
+    @Message(id = 162, value = "An invalid SameSite attribute [%s] is specified. It must be one of %s")
+    IllegalArgumentException invalidSameSiteMode(String mode, String validAttributes);
 
     @Message(id = 163, value = "Invalid token %s")
     IllegalArgumentException invalidToken(byte c);
@@ -574,4 +579,43 @@ public interface UndertowMessages {
 
     @Message(id = 185, value = "Invalid IP address %s")
     IOException invalidIpAddress(String addressString);
+
+    @Message(id = 186, value = "Invalid TLS extension")
+    SSLException invalidTlsExt();
+
+    @Message(id = 187, value = "Not enough data")
+    SSLException notEnoughData();
+
+    @Message(id = 188, value = "Empty host name in SNI extension")
+    SSLException emptyHostNameSni();
+
+    @Message(id = 189, value = "Duplicated host name of type %s")
+    SSLException duplicatedSniServerName(int type);
+
+    @Message(id = 190, value = "No context for SSL connection")
+    SSLException noContextForSslConnection();
+
+    @Message(id = 191, value = "Default context cannot be null")
+    IllegalStateException defaultContextCannotBeNull();
+
+    @Message(id = 192, value = "Form value is a in-memory file, use getFileItem() instead")
+    IllegalStateException formValueIsInMemoryFile();
+
+    @Message(id = 193, value = "Character decoding failed. Parameter [%s] with value [%s] has been ignored. Note: further occurrences of Parameter errors will be logged at DEBUG level.")
+    String failedToDecodeParameterValue(String parameter, String value, @Cause Exception e);
+
+    @Message(id = 194, value = "Character decoding failed. Parameter with name [%s] has been ignored. Note: further occurrences of Parameter errors will be logged at DEBUG level.")
+    String failedToDecodeParameterName(String parameter, @Cause Exception e);
+
+    @Message(id = 195, value = "Chunk size too large")
+    IOException chunkSizeTooLarge();
+
+    @Message(id = 196, value = "Session with id %s already exists")
+    IllegalStateException sessionWithIdAlreadyExists(String sessionID);
+
+    @Message(id = 197, value = "Blocking read timed out after %s nanoseconds.")
+    ReadTimeoutException blockingReadTimedOut(long timeoutNanoseconds);
+
+    @Message(id = 198, value = "Blocking write timed out after %s nanoseconds.")
+    WriteTimeoutException blockingWriteTimedOut(long timeoutNanoseconds);
 }

@@ -32,6 +32,7 @@ import javax.net.ssl.SSLSession;
 import java.io.IOException;
 import java.net.SocketAddress;
 import java.util.Set;
+import java.util.concurrent.Executor;
 
 /**
  * @author Stuart Douglas
@@ -50,11 +51,11 @@ class UndertowSslConnection extends SslConnection {
      *
      * @param delegate the underlying connection
      */
-    UndertowSslConnection(StreamConnection delegate, SSLEngine engine, ByteBufferPool bufferPool) {
+    UndertowSslConnection(StreamConnection delegate, SSLEngine engine, ByteBufferPool bufferPool, Executor delegatedTaskExecutor) {
         super(delegate.getIoThread());
         this.delegate = delegate;
         this.engine = engine;
-        sslConduit = new SslConduit(this, delegate, engine, bufferPool, new HandshakeCallback());
+        sslConduit = new SslConduit(this, delegate, engine, delegatedTaskExecutor, bufferPool, new HandshakeCallback());
         setSourceConduit(sslConduit);
         setSinkConduit(sslConduit);
     }
@@ -109,8 +110,13 @@ class UndertowSslConnection extends SslConnection {
             try {
                 return option.cast(engine.getNeedClientAuth() ? SslClientAuthMode.REQUIRED : engine.getWantClientAuth() ? SslClientAuthMode.REQUESTED : SslClientAuthMode.NOT_REQUESTED);
             } finally {
-                engine.setNeedClientAuth(value == SslClientAuthMode.REQUIRED);
-                engine.setWantClientAuth(value == SslClientAuthMode.REQUESTED);
+                engine.setWantClientAuth(false);
+                engine.setNeedClientAuth(false);
+                if (value == SslClientAuthMode.REQUESTED) {
+                    engine.setWantClientAuth(true);
+                } else if (value == SslClientAuthMode.REQUIRED) {
+                    engine.setNeedClientAuth(true);
+                }
             }
         } else if (option == Options.SECURE) {
             throw new IllegalArgumentException();

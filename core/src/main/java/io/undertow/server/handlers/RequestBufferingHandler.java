@@ -64,7 +64,7 @@ public class RequestBufferingHandler implements HttpHandler {
                     int r;
                     ByteBuffer b = buffer.getBuffer();
                     r = channel.read(b);
-                    if (r == -1) { //TODO: listener read
+                    if (r == -1) {
                         if (b.position() == 0) {
                             buffer.close();
                         } else {
@@ -87,7 +87,7 @@ public class RequestBufferingHandler implements HttpHandler {
                                         int r;
                                         ByteBuffer b = buffer.getBuffer();
                                         r = channel.read(b);
-                                        if (r == -1) { //TODO: listener read
+                                        if (r == -1) {
                                             if (b.position() == 0) {
                                                 buffer.close();
                                             } else {
@@ -96,8 +96,9 @@ public class RequestBufferingHandler implements HttpHandler {
                                             }
                                             Connectors.ungetRequestBytes(exchange, bufferedData);
                                             Connectors.resetRequestChannel(exchange);
-                                            Connectors.executeRootHandler(next, exchange);
                                             channel.getReadSetter().set(null);
+                                            channel.suspendReads();
+                                            Connectors.executeRootHandler(next, exchange);
                                             return;
                                         } else if (r == 0) {
                                             return;
@@ -107,8 +108,9 @@ public class RequestBufferingHandler implements HttpHandler {
                                             if (readBuffers == maxBuffers) {
                                                 Connectors.ungetRequestBytes(exchange, bufferedData);
                                                 Connectors.resetRequestChannel(exchange);
-                                                Connectors.executeRootHandler(next, exchange);
                                                 channel.getReadSetter().set(null);
+                                                channel.suspendReads();
+                                                Connectors.executeRootHandler(next, exchange);
                                                 return;
                                             }
                                             buffer = exchange.getConnection().getByteBufferPool().allocate();
@@ -168,6 +170,11 @@ public class RequestBufferingHandler implements HttpHandler {
         public HttpHandler wrap(HttpHandler handler) {
             return new RequestBufferingHandler(handler, maxBuffers);
         }
+    }
+
+    @Override
+    public String toString() {
+        return "buffer-request( " + maxBuffers + " )";
     }
 
     public static final class Builder implements HandlerBuilder {

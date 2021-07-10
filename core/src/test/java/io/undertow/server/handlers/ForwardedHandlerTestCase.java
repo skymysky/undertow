@@ -21,6 +21,7 @@ import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 
 import static io.undertow.server.handlers.ForwardedHandler.parseAddress;
 import static io.undertow.server.handlers.ForwardedHandler.parseHeader;
@@ -34,12 +35,27 @@ public class ForwardedHandlerTestCase {
 
     @BeforeClass
     public static void setup() {
+        final boolean DEFAULT_CHANGE_LOCAL_ADDR_PORT = Boolean.TRUE;
         DefaultServer.setRootHandler(new ForwardedHandler(new HttpHandler() {
             @Override
             public void handleRequest(HttpServerExchange exchange) throws Exception {
-                exchange.getResponseSender().send(exchange.getRequestScheme() + "|" + exchange.getHostAndPort()+ "|" + exchange.getDestinationAddress() + "|" + exchange.getSourceAddress() );
+                exchange.getResponseSender().send(
+                        exchange.getRequestScheme()
+                                + "|" + exchange.getHostAndPort()
+                                + "|" + toJreNormalizedString(exchange.getDestinationAddress())
+                                + "|" + toJreNormalizedString(exchange.getSourceAddress()));
             }
-        }));
+        }, DEFAULT_CHANGE_LOCAL_ADDR_PORT));
+    }
+
+    private static String toJreNormalizedString(InetSocketAddress address) {
+        // https://mail.openjdk.java.net/pipermail/net-dev/2019-June/012741.html
+        // https://bugs.openjdk.java.net/browse/JDK-8225499
+        // Java 14 introduced a new component to the toString value to disambiguate ipv6 values
+        return Objects.toString(address)
+                .replace("/<unresolved>", "")
+                .replace("[", "")
+                .replace("]", "");
     }
 
     @Test
@@ -132,6 +148,7 @@ public class ForwardedHandlerTestCase {
         Assert.assertEquals( "foo.com", res[1]);
         Assert.assertEquals( "foo.com:80", res[2]);
         Assert.assertEquals( "/9.9.9.9:2343", res[3]);
+
     }
 
     private static String[] run(String ... headers) throws IOException {

@@ -26,7 +26,6 @@ import java.lang.ref.WeakReference;
 import java.nio.ByteBuffer;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
@@ -41,7 +40,8 @@ import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 public class DefaultByteBufferPool implements ByteBufferPool {
 
     private final ThreadLocal<ThreadLocalData> threadLocalCache = new ThreadLocal<>();
-    private final List<WeakReference<ThreadLocalData>> threadLocalDataList = Collections.synchronizedList(new ArrayList<WeakReference<ThreadLocalData>>());
+    // Access requires synchronization on the threadLocalDataList instance
+    private final List<WeakReference<ThreadLocalData>> threadLocalDataList = new ArrayList<>();
     private final ConcurrentLinkedQueue<ByteBuffer> queue = new ConcurrentLinkedQueue<>();
 
     private final boolean direct;
@@ -122,9 +122,6 @@ public class DefaultByteBufferPool implements ByteBufferPool {
             local = threadLocalCache.get();
             if (local != null) {
                 buffer = local.buffers.poll();
-                if (buffer != null) {
-                    currentQueueLengthUpdater.decrementAndGet(this);
-                }
             } else {
                 local = new ThreadLocalData();
                 synchronized (threadLocalDataList) {
@@ -140,6 +137,9 @@ public class DefaultByteBufferPool implements ByteBufferPool {
         }
         if (buffer == null) {
             buffer = queue.poll();
+            if (buffer != null) {
+                currentQueueLengthUpdater.decrementAndGet(this);
+            }
         }
         if (buffer == null) {
             if (direct) {
@@ -149,7 +149,9 @@ public class DefaultByteBufferPool implements ByteBufferPool {
             }
         }
         if(local != null) {
-            local.allocationDepth++;
+            if(local.allocationDepth < threadLocalCacheSize) { //prevent overflow if the thread only allocates and never frees
+                local.allocationDepth++;
+            }
         }
         buffer.clear();
         return new DefaultPooledBuffer(this, buffer, leakDectionPercent == 0 ? false : (++count % 100 < leakDectionPercent));
@@ -207,7 +209,7 @@ public class DefaultByteBufferPool implements ByteBufferPool {
                 DirectByteBufferDeallocator.free(buffer);
                 return;
             }
-        } while (!currentQueueLengthUpdater.compareAndSet(this, size, currentQueueLength + 1));
+        } while (!currentQueueLengthUpdater.compareAndSet(this, size, size + 1));
         queue.add(buffer);
     }
 

@@ -61,7 +61,7 @@ public class MappingTestCase {
             String response = HttpClientUtils.readResponse(result);
             Assert.assertEquals("Mapping match:PATH\n" +
                     "Match value:foo\n" +
-                    "Pattern:/path/*", response);
+                    "Pattern:/path/*\nServlet:path", response);
 
             get = new HttpGet(DefaultServer.getDefaultServerURL() + "/servletContext/foo.ext");
             result = client.execute(get);
@@ -69,7 +69,7 @@ public class MappingTestCase {
             response = HttpClientUtils.readResponse(result);
             Assert.assertEquals("Mapping match:EXTENSION\n" +
                     "Match value:foo\n" +
-                    "Pattern:*.ext", response);
+                    "Pattern:*.ext\nServlet:path", response);
 
             get = new HttpGet(DefaultServer.getDefaultServerURL() + "/servletContext/");
             result = client.execute(get);
@@ -77,15 +77,15 @@ public class MappingTestCase {
             response = HttpClientUtils.readResponse(result);
             Assert.assertEquals("Mapping match:CONTEXT_ROOT\n" +
                     "Match value:\n" +
-                    "Pattern:", response);
+                    "Pattern:\nServlet:path", response);
 
             get = new HttpGet(DefaultServer.getDefaultServerURL() + "/servletContext/doesnotexist");
             result = client.execute(get);
             Assert.assertEquals(StatusCodes.OK, result.getStatusLine().getStatusCode());
             response = HttpClientUtils.readResponse(result);
             Assert.assertEquals("Mapping match:DEFAULT\n" +
-                    "Match value:doesnotexist\n" +
-                    "Pattern:/", response);
+                    "Match value:\n" +
+                    "Pattern:/\nServlet:path", response);
 
             get = new HttpGet(DefaultServer.getDefaultServerURL() + "/servletContext/exact");
             result = client.execute(get);
@@ -93,7 +93,7 @@ public class MappingTestCase {
             response = HttpClientUtils.readResponse(result);
             Assert.assertEquals("Mapping match:EXACT\n" +
                     "Match value:exact\n" +
-                    "Pattern:/exact", response);
+                    "Pattern:/exact\nServlet:path", response);
 
         } finally {
             client.getConnectionManager().shutdown();

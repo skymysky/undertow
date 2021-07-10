@@ -24,12 +24,9 @@ import io.undertow.util.HeaderValues;
 import io.undertow.util.Headers;
 import io.undertow.util.HttpString;
 
-import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Collection;
@@ -62,11 +59,18 @@ public class PartImpl implements Part {
 
     @Override
     public InputStream getInputStream() throws IOException {
-        if (formValue.isFile()) {
-            return new BufferedInputStream(Files.newInputStream(formValue.getPath()));
+        if (formValue.isFileItem()) {
+            return formValue.getFileItem().getInputStream();
         } else {
-            String requestedCharset = servletRequest.getCharacterEncoding();
-            String charset = requestedCharset != null ? requestedCharset : servletContext.getDeployment().getDefaultRequestCharset().name();
+            String charset;
+            if (formValue.getCharset() != null) {
+                charset = formValue.getCharset();
+            } else if (servletRequest.getCharacterEncoding() != null) {
+                charset = servletRequest.getCharacterEncoding();
+            } else {
+                charset = servletContext.getDeployment().getDefaultRequestCharset().name();
+            }
+
             return new ByteArrayInputStream(formValue.getValue().getBytes(charset));
         }
     }
@@ -89,8 +93,10 @@ public class PartImpl implements Part {
     @Override
     public long getSize() {
         try {
-            if (formValue.isFile()) {
-                return Files.size(formValue.getPath());
+            if (formValue.isFileItem()) {
+                return formValue.getFileItem().getFileSize();
+            } else if (formValue.getCharset() != null) {
+                return formValue.getValue().getBytes(formValue.getCharset()).length;
             } else {
                 return formValue.getValue().length();
             }
@@ -109,20 +115,19 @@ public class PartImpl implements Part {
                 target = Paths.get(config.getLocation(), fileName);
             }
         }
-        try {
-            Files.move(formValue.getPath(), target);
-        } catch (IOException e) {
-            Files.copy(formValue.getPath(), target);
+        if (formValue.isFileItem()) {
+            formValue.getFileItem().write(target);
         }
     }
 
     @Override
     public void delete() throws IOException {
-        try {
-            Files.delete(formValue.getPath());
-        } catch (NoSuchFileException e) { //already deleted
-        } catch (IOException e) {
-            throw UndertowServletMessages.MESSAGES.deleteFailed(formValue.getPath());
+        if (formValue.isFileItem()) {
+            try {
+                formValue.getFileItem().delete();
+            } catch (IOException e) {
+                throw UndertowServletMessages.MESSAGES.deleteFailed(formValue.getPath());
+            }
         }
     }
 

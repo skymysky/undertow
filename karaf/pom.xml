@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
+
 <!--
   ~ JBoss, Home of Professional Open Source.
   ~ Copyright 2012 Red Hat, Inc., and individual contributors
@@ -16,38 +17,25 @@
   ~ See the License for the specific language governing permissions and
   ~ limitations under the License.
   -->
-
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
         <groupId>io.undertow</groupId>
         <artifactId>undertow-parent</artifactId>
-        <version>2.0.4.Final-SNAPSHOT</version>
+        <version>2.2.9.Final-SNAPSHOT</version>
     </parent>
 
     <groupId>io.undertow</groupId>
     <artifactId>karaf</artifactId>
-    <version>2.0.4.Final-SNAPSHOT</version>
+    <version>2.2.9.Final-SNAPSHOT</version>
+
+    <name>Undertow Karaf feature</name>
+
     <packaging>pom</packaging>
 
-    <name>Undertow Karaf Features</name>
-
     <properties>
-        <test.level>INFO</test.level>
-        <ajp>false</ajp>
-        <proxy>false</proxy>
-        <dump>false</dump>
-        <https>false</https>
-        <openssl>false</openssl>
-        <test.ipv6>false</test.ipv6>
-        <bufferSize>8192</bufferSize>
-        <libraryPath></libraryPath>
-        <java.library.path></java.library.path>
-        <org.wildfly.openssl.path></org.wildfly.openssl.path>
-        <dependency.karaf.version>4.2.0.M2</dependency.karaf.version>
+        <version.karaf.plugin>4.2.10</version.karaf.plugin>
     </properties>
 
     <dependencies>
@@ -55,55 +43,18 @@
         <dependency>
             <groupId>org.apache.karaf.features</groupId>
             <artifactId>framework</artifactId>
-            <version>${dependency.karaf.version}</version>
             <type>kar</type>
             <scope>provided</scope>
+            <version>${version.karaf.plugin}</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>*</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
-        <dependency>
-            <groupId>io.undertow</groupId>
-            <artifactId>undertow-core</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>io.undertow</groupId>
-            <artifactId>undertow-servlet</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>io.undertow</groupId>
-            <artifactId>undertow-websockets-jsr</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>org.jboss.logging</groupId>
-            <artifactId>jboss-logging</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>org.jboss.logging</groupId>
-            <artifactId>jboss-logging-processor</artifactId>
-            <scope>provided</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.jboss.xnio</groupId>
-            <artifactId>xnio-api</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>org.jboss.xnio</groupId>
-            <artifactId>xnio-nio</artifactId>
-            <scope>runtime</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.eclipse.jetty.alpn</groupId>
-            <artifactId>alpn-api</artifactId>
-            <scope>provided</scope>
-        </dependency>
     </dependencies>
-
 
     <build>
         <resources>
@@ -113,26 +64,23 @@
             </resource>
         </resources>
 
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.karaf.tooling</groupId>
+                    <artifactId>karaf-maven-plugin</artifactId>
+                    <version>${version.karaf.plugin}</version>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+
         <plugins>
-            <plugin>
-                <groupId>io.reformanda.semper</groupId>
-                <artifactId>dependencyversion-maven-plugin</artifactId>
-                <version>1.0.0</version>
-                <executions>
-                    <execution>
-                        <id>set-all</id>
-                        <goals>
-                            <goal>set-version</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-resources-plugin</artifactId>
                 <executions>
                     <execution>
-                        <id>filter</id>
+                        <id>default</id>
                         <phase>generate-resources</phase>
                         <goals>
                             <goal>resources</goal>
@@ -143,7 +91,6 @@
             <plugin>
                 <groupId>org.apache.karaf.tooling</groupId>
                 <artifactId>karaf-maven-plugin</artifactId>
-                <version>${dependency.karaf.version}</version>
                 <executions>
                     <execution>
                         <id>verify</id>
@@ -153,7 +100,8 @@
                         </goals>
                         <configuration>
                             <descriptors>
-                                <descriptor>mvn:org.apache.karaf.features/framework/${dependency.karaf.version}/xml/features</descriptor>
+                                <descriptor>mvn:org.apache.karaf.features/framework/${version.karaf.plugin}/xml/features</descriptor>
+                                <descriptor>mvn:org.apache.karaf.features/standard/${version.karaf.plugin}/xml/features</descriptor>
                                 <descriptor>file:${project.build.directory}/classes/features.xml</descriptor>
                             </descriptors>
                             <distribution>org.apache.karaf.features:framework</distribution>
